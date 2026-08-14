@@ -21,6 +21,7 @@ add_library(gwl-airplay2
     src/crypto.cpp
     src/crypto_session.cpp
     src/audio_pipeline.cpp
+    src/callback_audio_sink.cpp
     src/platform.cpp
     src/platform_audio.cpp
 )
