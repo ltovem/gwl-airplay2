@@ -60,7 +60,10 @@ RtspResponse RtspSession::handle(const RtspRequest& request) {
     if (request.method == "ANNOUNCE") return announce(request);
     if (request.method == "SETUP") return setup(request);
     if (request.method == "RECORD") return record(request);
+    if (request.method == "PAUSE") return pause(request);
     if (request.method == "FLUSH") return flush(request);
+    if (request.method == "GET_PARAMETER") return get_parameter(request);
+    if (request.method == "SET_PARAMETER") return set_parameter(request);
     if (request.method == "TEARDOWN") return teardown(request);
     return base_response(request, 405, "Method Not Allowed");
 }
@@ -114,7 +117,29 @@ RtspResponse RtspSession::record(const RtspRequest& request) {
     return response;
 }
 
+RtspResponse RtspSession::pause(const RtspRequest& request) {
+    recording_ = false;
+    auto response = base_response(request, 200, "OK");
+    response.headers["Session"] = "GWL-AIRPLAY-1";
+    response.headers["Content-Length"] = "0";
+    return response;
+}
+
 RtspResponse RtspSession::flush(const RtspRequest& request) {
+    auto response = base_response(request, 200, "OK");
+    response.headers["Session"] = "GWL-AIRPLAY-1";
+    response.headers["Content-Length"] = "0";
+    return response;
+}
+
+RtspResponse RtspSession::get_parameter(const RtspRequest& request) {
+    auto response = base_response(request, 200, "OK");
+    response.headers["Session"] = "GWL-AIRPLAY-1";
+    response.headers["Content-Length"] = "0";
+    return response;
+}
+
+RtspResponse RtspSession::set_parameter(const RtspRequest& request) {
     auto response = base_response(request, 200, "OK");
     response.headers["Session"] = "GWL-AIRPLAY-1";
     response.headers["Content-Length"] = "0";
