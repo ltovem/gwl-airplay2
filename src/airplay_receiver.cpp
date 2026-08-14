@@ -1,8 +1,8 @@
 #include "airplay2/airplay_receiver.h"
 #include "airplay2/http_server.h"
 #include "airplay2/mdns.h"
+#include "airplay2/rtsp.h"
 
-#include <functional>
 #include <iomanip>
 #include <random>
 #include <sstream>
@@ -22,16 +22,46 @@ std::string make_device_id() {
     return out.str();
 }
 
+bool is_rtsp_request(const HttpRequest& request) {
+    return request.protocol == "RTSP/1.0" || request.method == "ANNOUNCE" ||
+           request.method == "SETUP" || request.method == "RECORD" ||
+           request.method == "FLUSH" || request.method == "TEARDOWN" ||
+           request.method == "GET_PARAMETER" || request.method == "SET_PARAMETER";
+}
+
 } // namespace
 
 class AirPlayReceiver::Impl {
 public:
     HttpServer server;
     MdnsService mdns;
+    RtspSession rtsp;
     bool running = false;
     ReceiverConfig config;
 
     HttpResponse handle(const HttpRequest& request) {
+        if (is_rtsp_request(request)) {
+            RtspRequest rtsp_request;
+            rtsp_request.method = request.method;
+            rtsp_request.uri = request.target;
+            rtsp_request.body = request.body;
+            rtsp_request.headers = request.headers;
+            const auto cseq = request.headers.find("CSeq");
+            if (cseq != request.headers.end()) {
+                try { rtsp_request.cseq = std::stoi(cseq->second); } catch (...) { rtsp_request.cseq = 0; }
+            }
+
+            const RtspResponse rtsp_response = rtsp.handle(rtsp_request);
+            HttpResponse response;
+            response.status = rtsp_response.status;
+            response.reason = rtsp_response.reason;
+            response.protocol = "RTSP/1.0";
+            response.content_type.clear();
+            response.headers = rtsp_response.headers;
+            response.body = rtsp_response.body;
+            return response;
+        }
+
         if (request.target == "/info" || request.target == "/info/") {
             std::ostringstream json;
             json << "{\"name\":\"" << config.device_name
@@ -41,12 +71,13 @@ public:
                  << ",\"audio\":" << (config.enable_audio ? "true" : "false")
                  << ",\"video\":" << (config.enable_video ? "true" : "false")
                  << "}";
-            return {200, "application/json", json.str()};
+            return {200, "OK", "HTTP/1.1", "application/json", {}, json.str()};
         }
+
         if (request.method == "OPTIONS") {
-            return {200, "text/plain", ""};
+            return {200, "OK", "HTTP/1.1", "text/plain", {}, ""};
         }
-        return {404, "text/plain", "Not Found"};
+        return {404, "Not Found", "HTTP/1.1", "text/plain", {}, "Not Found"};
     }
 };
 
@@ -87,6 +118,7 @@ void AirPlayReceiver::stop() {
     if (!impl_) return;
     impl_->mdns.unpublish();
     impl_->server.stop();
+    impl_->rtsp = RtspSession{};
     impl_->running = false;
 }
 
