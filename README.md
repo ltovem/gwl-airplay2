@@ -11,7 +11,8 @@ Cross-platform C++ AirPlay receiver project.
 - [x] Basic HTTP request/response handling
 - [x] Receiver lifecycle API
 - [x] `/info` endpoint
-- [ ] mDNS/DNS-SD publication
+- [x] Initial mDNS/DNS-SD AirPlay service advertisement
+- [ ] Query-driven mDNS responder and full DNS-SD record set
 - [ ] Full AirPlay RTSP state machine
 - [ ] Pairing/authentication
 - [ ] Encrypted audio
