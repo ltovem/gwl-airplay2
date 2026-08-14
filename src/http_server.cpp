@@ -1,7 +1,10 @@
 #include "airplay2/http_server.h"
 
+#include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cstring>
+#include <sstream>
 #include <thread>
 
 #ifdef _WIN32
@@ -26,7 +29,62 @@ void close_socket(socket_t s) { if (s != INVALID_SOCKET) closesocket(s); }
 #else
 void close_socket(socket_t s) { if (s >= 0) ::close(s); }
 #endif
+
+std::string trim(std::string value) {
+    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front()))) value.erase(value.begin());
+    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back()))) value.pop_back();
+    return value;
 }
+
+std::string header_value(const std::map<std::string, std::string>& headers, const char* name) {
+    for (const auto& item : headers) {
+        if (item.first.size() != std::strlen(name)) continue;
+        bool equal = true;
+        for (std::size_t i = 0; i < item.first.size(); ++i) {
+            if (std::tolower(static_cast<unsigned char>(item.first[i])) !=
+                std::tolower(static_cast<unsigned char>(name[i]))) { equal = false; break; }
+        }
+        if (equal) return item.second;
+    }
+    return {};
+}
+
+bool parse_request(std::string& input, HttpRequest& request) {
+    const auto header_end = input.find("\r\n\r\n");
+    if (header_end == std::string::npos) return false;
+
+    const auto first_end = input.find("\r\n");
+    if (first_end == std::string::npos || first_end > header_end) return false;
+    const auto first = input.substr(0, first_end);
+    std::istringstream first_stream(first);
+    if (!(first_stream >> request.method >> request.target >> request.protocol)) return false;
+
+    request.headers.clear();
+    std::size_t line_start = first_end + 2;
+    while (line_start < header_end) {
+        const auto line_end = input.find("\r\n", line_start);
+        if (line_end == std::string::npos || line_end > header_end) return false;
+        const auto colon = input.find(':', line_start);
+        if (colon == std::string::npos || colon > line_end) return false;
+        request.headers[trim(input.substr(line_start, colon - line_start))] =
+            trim(input.substr(colon + 1, line_end - colon - 1));
+        line_start = line_end + 2;
+    }
+
+    std::size_t content_length = 0;
+    const auto length = header_value(request.headers, "Content-Length");
+    if (!length.empty()) {
+        try { content_length = std::stoul(length); }
+        catch (...) { return false; }
+    }
+    const std::size_t total = header_end + 4 + content_length;
+    if (input.size() < total) return false;
+    request.body.assign(input.data() + header_end + 4, content_length);
+    input.erase(0, total);
+    return true;
+}
+
+} // namespace
 
 class HttpServer::Impl {
 public:
@@ -34,6 +92,47 @@ public:
     socket_t listen_socket = invalid_socket;
     std::thread thread;
     HttpHandler handler;
+
+    void serve_client(socket_t client) {
+        std::string input;
+        input.reserve(16384);
+        std::array<char, 8192> buffer{};
+
+        while (running.load()) {
+#ifdef _WIN32
+            const int n = ::recv(client, buffer.data(), static_cast<int>(buffer.size()), 0);
+#else
+            const int n = static_cast<int>(::recv(client, buffer.data(), buffer.size(), 0));
+#endif
+            if (n <= 0) break;
+            input.append(buffer.data(), static_cast<std::size_t>(n));
+
+            while (true) {
+                HttpRequest request;
+                if (!parse_request(input, request)) break;
+                HttpResponse response = handler ? handler(request) : HttpResponse{};
+                if (response.reason.empty()) response.reason = response.status == 200 ? "OK" : "Error";
+
+                std::string out = response.protocol + " " + std::to_string(response.status) + " " + response.reason + "\r\n";
+                if (!response.content_type.empty()) out += "Content-Type: " + response.content_type + "\r\n";
+                out += "Content-Length: " + std::to_string(response.body.size()) + "\r\n";
+                for (const auto& header : response.headers) {
+                    out += header.first + ": " + header.second + "\r\n";
+                }
+                out += "\r\n";
+                out += response.body;
+#ifdef _WIN32
+                if (::send(client, out.data(), static_cast<int>(out.size()), 0) <= 0) break;
+#else
+                if (::send(client, out.data(), out.size(), 0) <= 0) break;
+#endif
+
+                const auto connection = header_value(request.headers, "Connection");
+                if (connection == "close" || response.headers.find("Connection") != response.headers.end() &&
+                    response.headers.at("Connection") == "close") return;
+            }
+        }
+    }
 
     void serve() {
         while (running.load()) {
@@ -45,36 +144,7 @@ public:
 #endif
             socket_t client = ::accept(listen_socket, reinterpret_cast<sockaddr*>(&addr), &len);
             if (client == invalid_socket) continue;
-
-            char buffer[8192]{};
-#ifdef _WIN32
-            int n = ::recv(client, buffer, sizeof(buffer) - 1, 0);
-#else
-            int n = static_cast<int>(::recv(client, buffer, sizeof(buffer) - 1, 0));
-#endif
-            if (n > 0) {
-                std::string raw(buffer, static_cast<size_t>(n));
-                auto line_end = raw.find("\r\n");
-                auto line = raw.substr(0, line_end == std::string::npos ? raw.size() : line_end);
-                auto a = line.find(' ');
-                auto b = line.find(' ', a + 1);
-                HttpRequest request;
-                if (a != std::string::npos && b != std::string::npos) {
-                    request.method = line.substr(0, a);
-                    request.target = line.substr(a + 1, b - a - 1);
-                }
-                auto body_pos = raw.find("\r\n\r\n");
-                if (body_pos != std::string::npos) request.body = raw.substr(body_pos + 4);
-
-                HttpResponse response = handler ? handler(request) : HttpResponse{};
-                const char* reason = response.status == 200 ? "OK" : "Error";
-                std::string out = "HTTP/1.1 " + std::to_string(response.status) + " " + reason + "\r\n";
-                out += "Content-Type: " + response.content_type + "\r\n";
-                out += "Content-Length: " + std::to_string(response.body.size()) + "\r\n";
-                out += "Connection: close\r\n\r\n";
-                out += response.body;
-                ::send(client, out.data(), static_cast<int>(out.size()), 0);
-            }
+            serve_client(client);
             close_socket(client);
         }
     }
