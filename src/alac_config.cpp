@@ -2,9 +2,8 @@
 
 #include <algorithm>
 #include <cctype>
-#include <cstdint>
 #include <sstream>
-#include <string_view>
+#include <string>
 
 namespace gwl::airplay2 {
 namespace {
@@ -29,9 +28,10 @@ std::string trim(std::string value) {
 
 bool parse_uint(const std::string& value, std::uint32_t& out) {
     try {
+        const auto cleaned = trim(value);
         std::size_t consumed = 0;
-        const auto n = std::stoul(trim(value), &consumed, 0);
-        if (consumed != trim(value).size() || n > 0xffffffffUL) return false;
+        const auto n = std::stoul(cleaned, &consumed, 0);
+        if (consumed != cleaned.size() || n > 0xffffffffUL) return false;
         out = static_cast<std::uint32_t>(n);
         return true;
     } catch (...) {
@@ -42,32 +42,25 @@ bool parse_uint(const std::string& value, std::uint32_t& out) {
 } // namespace
 
 bool AlacConfig::valid() const noexcept {
-    return sample_rate != 0 && channels != 0 && bit_depth != 0 &&
-           frame_length != 0 && num_channels != 0;
+    return frame_length != 0 && num_channels != 0 && sample_rate != 0 &&
+           bit_depth != 0;
 }
 
 bool parse_alac_config(const std::vector<std::uint8_t>& data, AlacConfig& result) {
-    // ISO/IEC 14496-3 ALACSpecificConfig is normally represented by a
-    // 24-byte big-endian structure in the magic cookie.
     if (data.size() < 24) return false;
 
     AlacConfig cfg;
-    cfg.compatible_version = data[0];
-    cfg.frame_length = be32(data.data() + 1);
-    cfg.compatible_version = data[0];
+    cfg.frame_length = be32(data.data());
+    cfg.compatible_version = data[4];
     cfg.pb = data[5];
     cfg.mb = data[6];
     cfg.kb = data[7];
-    cfg.num_channels = data[9];
-    cfg.max_run = be16(data.data() + 10);
-    cfg.max_frame_bytes = be32(data.data() + 12);
-    cfg.avg_bit_rate = be32(data.data() + 16);
-    cfg.max_bit_rate = be32(data.data() + 20);
-
-    // sample rate and bit depth are supplied by the surrounding stream/SDP in
-    // many AirPlay transports, so leave them unset here rather than guessing.
-    cfg.channels = cfg.num_channels;
-    cfg.codec_data = data;
+    cfg.num_channels = data[8];
+    cfg.max_run = be16(data.data() + 9);
+    cfg.max_frame_bytes = be32(data.data() + 11);
+    cfg.avg_bit_rate = be32(data.data() + 15);
+    cfg.sample_rate = be32(data.data() + 19);
+    cfg.codec_data.assign(data.begin(), data.begin() + 24);
     result = std::move(cfg);
     return true;
 }
@@ -83,12 +76,20 @@ bool parse_alac_fmtp(const std::string& fmtp, AlacConfig& result) {
         const auto value = trim(token.substr(eq + 1));
         std::uint32_t number = 0;
         if (!parse_uint(value, number)) continue;
-        if (key == "sampleRate" || key == "sample_rate") cfg.sample_rate = number;
-        else if (key == "channels") cfg.channels = static_cast<std::uint16_t>(number);
-        else if (key == "bitDepth" || key == "bit_depth") cfg.bit_depth = static_cast<std::uint16_t>(number);
-        else if (key == "frameLength" || key == "frame_length") cfg.frame_length = number;
+
+        if (key == "sampleRate" || key == "sample_rate" || key == "sample-rate") {
+            cfg.sample_rate = number;
+        } else if (key == "channels") {
+            if (number > 255) return false;
+            cfg.num_channels = static_cast<std::uint8_t>(number);
+        } else if (key == "bitDepth" || key == "bit_depth" || key == "bit-depth") {
+            if (number > 65535) return false;
+            cfg.bit_depth = static_cast<std::uint16_t>(number);
+        } else if (key == "frameLength" || key == "frame_length" || key == "frame-length") {
+            cfg.frame_length = number;
+        }
     }
-    if (cfg.num_channels == 0) cfg.num_channels = static_cast<std::uint8_t>(cfg.channels);
+
     if (!cfg.valid()) return false;
     result = std::move(cfg);
     return true;
