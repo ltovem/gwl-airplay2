@@ -1,16 +1,12 @@
-name: build
+name: legacy-build
 
+# Kept as a manual fallback. The unified CI workflow is ci.yml.
 on:
-  push:
-  pull_request:
+  workflow_dispatch:
 
 jobs:
   build:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Configure
