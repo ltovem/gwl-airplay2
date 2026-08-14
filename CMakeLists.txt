@@ -24,6 +24,7 @@ add_library(gwl-airplay2
     src/callback_audio_sink.cpp
     src/platform.cpp
     src/platform_audio.cpp
+    src/alac_config.cpp
 )
 
 target_include_directories(gwl-airplay2
