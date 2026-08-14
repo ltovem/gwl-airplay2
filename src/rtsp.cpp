@@ -35,7 +35,7 @@ std::string header_value(const RtspRequest& request, const char* name) {
 std::uint16_t parse_port(const std::string& text, const char* key) {
     const auto pos = text.find(key);
     if (pos == std::string::npos) return 0;
-    auto start = pos + std::char_traits<char>::length(key);
+    const auto start = pos + std::char_traits<char>::length(key);
     auto end = start;
     while (end < text.size() && std::isdigit(static_cast<unsigned char>(text[end]))) ++end;
     if (end == start) return 0;
@@ -48,6 +48,9 @@ std::uint16_t parse_port(const std::string& text, const char* key) {
 }
 
 } // namespace
+
+RtspSession::RtspSession() = default;
+RtspSession::~RtspSession() = default;
 
 RtspResponse RtspSession::handle(const RtspRequest& request) {
     if (request.method == "OPTIONS") return options(request);
@@ -81,27 +84,29 @@ RtspResponse RtspSession::setup(const RtspRequest& request) {
     transport_.client_control_port = parse_port(transport, "control_port=");
     transport_.client_timing_port = parse_port(transport, "timing_port=");
 
-    // Allocate local ports lazily. The media layer will bind these exact ports
-    // when it is attached to the session. For now reserve a deterministic pair
-    // in the dynamic/private range and expose the negotiation to the client.
-    static std::uint16_t next_port = 7001;
-    transport_.server_data_port = next_port;
-    transport_.server_control_port = static_cast<std::uint16_t>(next_port + 1);
-    transport_.server_timing_port = static_cast<std::uint16_t>(next_port + 2);
-    next_port = static_cast<std::uint16_t>(next_port + 4);
+    if (!media_receiver_) media_receiver_ = std::make_unique<RtpReceiver>();
+    if (!media_receiver_->bind(0)) {
+        return base_response(request, 500, "Internal Server Error");
+    }
+
+    transport_.server_data_port = media_receiver_->port();
+    // Control/timing channels are reserved for the timing layer. They are not
+    // advertised as bound sockets until that layer is implemented.
+    transport_.server_control_port = 0;
+    transport_.server_timing_port = 0;
 
     auto response = base_response(request, 200, "OK");
     response.headers["Session"] = "GWL-AIRPLAY-1";
     response.headers["Transport"] =
-        "RTP/AVP/UDP;unicast;mode=record;server_port=" + std::to_string(transport_.server_data_port) +
-        ";control_port=" + std::to_string(transport_.server_control_port) +
-        ";timing_port=" + std::to_string(transport_.server_timing_port);
+        "RTP/AVP/UDP;unicast;mode=record;server_port=" + std::to_string(transport_.server_data_port);
     response.headers["Content-Length"] = "0";
     return response;
 }
 
 RtspResponse RtspSession::record(const RtspRequest& request) {
-    if (!configured_) return base_response(request, 455, "Method Not Valid in This State");
+    if (!configured_ || !media_receiver_ || !media_receiver_->running()) {
+        return base_response(request, 455, "Method Not Valid in This State");
+    }
     recording_ = true;
     auto response = base_response(request, 200, "OK");
     response.headers["Session"] = "GWL-AIRPLAY-1";
@@ -120,6 +125,8 @@ RtspResponse RtspSession::teardown(const RtspRequest& request) {
     recording_ = false;
     configured_ = false;
     transport_ = {};
+    if (media_receiver_) media_receiver_->close();
+    media_receiver_.reset();
     auto response = base_response(request, 200, "OK");
     response.headers["Session"] = "GWL-AIRPLAY-1";
     response.headers["Content-Length"] = "0";
