@@ -16,6 +16,7 @@ add_library(gwl-airplay2
     src/rtsp.cpp
     src/rtp.cpp
     src/sdp.cpp
+    src/crypto.cpp
 )
 
 target_include_directories(gwl-airplay2
