@@ -74,9 +74,7 @@ public:
             return {200, "OK", "HTTP/1.1", "application/json", {}, json.str()};
         }
 
-        if (request.method == "OPTIONS") {
-            return {200, "OK", "HTTP/1.1", "text/plain", {}, ""};
-        }
+        if (request.method == "OPTIONS") return {200, "OK", "HTTP/1.1", "text/plain", {}, ""};
         return {404, "Not Found", "HTTP/1.1", "text/plain", {}, "Not Found"};
     }
 };
@@ -89,6 +87,7 @@ bool AirPlayReceiver::start(const ReceiverConfig& config) {
 
     impl_->config = config;
     if (impl_->config.device_id.empty()) impl_->config.device_id = make_device_id();
+    impl_->rtsp.reset();
 
     if (!impl_->server.start(config.port, [this](const HttpRequest& request) {
             return impl_->handle(request);
@@ -117,8 +116,8 @@ bool AirPlayReceiver::start(const ReceiverConfig& config) {
 void AirPlayReceiver::stop() {
     if (!impl_) return;
     impl_->mdns.unpublish();
+    impl_->rtsp.reset();
     impl_->server.stop();
-    impl_->rtsp = RtspSession{};
     impl_->running = false;
 }
 
