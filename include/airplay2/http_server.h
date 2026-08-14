@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <string>
 
 namespace gwl::airplay2 {
@@ -9,12 +10,17 @@ namespace gwl::airplay2 {
 struct HttpRequest {
     std::string method;
     std::string target;
+    std::string protocol = "HTTP/1.1";
+    std::map<std::string, std::string> headers;
     std::string body;
 };
 
 struct HttpResponse {
     int status = 200;
+    std::string reason = "OK";
+    std::string protocol = "HTTP/1.1";
     std::string content_type = "text/plain";
+    std::map<std::string, std::string> headers;
     std::string body;
 };
 
