@@ -13,6 +13,7 @@ add_library(gwl-airplay2
     src/airplay_receiver.cpp
     src/http_server.cpp
     src/mdns.cpp
+    src/rtsp.cpp
 )
 
 target_include_directories(gwl-airplay2
