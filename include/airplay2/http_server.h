@@ -25,6 +25,7 @@ struct HttpResponse {
 };
 
 using HttpHandler = std::function<HttpResponse(const HttpRequest&)>;
+using HttpHandlerFactory = std::function<HttpHandler()>;
 
 class HttpServer {
 public:
@@ -32,6 +33,7 @@ public:
     ~HttpServer();
 
     bool start(std::uint16_t port, HttpHandler handler);
+    bool start_per_connection(std::uint16_t port, HttpHandlerFactory factory);
     void stop();
     bool running() const noexcept;
 
