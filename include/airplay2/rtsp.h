@@ -53,7 +53,10 @@ private:
     RtspResponse announce(const RtspRequest& request);
     RtspResponse setup(const RtspRequest& request);
     RtspResponse record(const RtspRequest& request);
+    RtspResponse pause(const RtspRequest& request);
     RtspResponse flush(const RtspRequest& request);
+    RtspResponse get_parameter(const RtspRequest& request);
+    RtspResponse set_parameter(const RtspRequest& request);
     RtspResponse teardown(const RtspRequest& request);
 
     bool configured_ = false;
