@@ -25,6 +25,7 @@ add_library(gwl-airplay2
     src/platform.cpp
     src/platform_audio.cpp
     src/alac_config.cpp
+    src/alac_decoder.cpp
 )
 
 target_include_directories(gwl-airplay2
