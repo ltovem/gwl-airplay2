@@ -1,5 +1,5 @@
 #include "airplay2/rtsp.h"
-#include "airplay2/sdp.h"
+#include "airplay2/crypto.h"
 
 #include <algorithm>
 #include <cctype>
@@ -52,6 +52,8 @@ void RtspSession::reset() {
     recording_ = false;
     configured_ = false;
     transport_ = {};
+    sdp_ = {};
+    crypto_.reset();
     if (media_receiver_) media_receiver_->close();
     media_receiver_.reset();
 }
@@ -77,9 +79,22 @@ RtspResponse RtspSession::options(const RtspRequest& request) {
 }
 
 RtspResponse RtspSession::announce(const RtspRequest& request) {
-    AirPlaySdp sdp;
-    if (!parse_sdp(request.body, sdp)) return base_response(request, 400, "Bad Request");
-    if (!sdp.has_audio() && !sdp.has_video()) return base_response(request, 415, "Unsupported Media Type");
+    AirPlaySdp parsed;
+    if (!parse_sdp(request.body, parsed)) return base_response(request, 400, "Bad Request");
+    if (!parsed.has_audio() && !parsed.has_video()) return base_response(request, 415, "Unsupported Media Type");
+
+    CryptoParameters parameters;
+    if (!extract_crypto_parameters(parsed, parameters)) {
+        // Not every AirPlay negotiation uses the legacy SDP key/IV path. Keep
+        // the parsed SDP available so a future paired-session handshake can
+        // take over instead of pretending that crypto was negotiated.
+        sdp_ = parsed;
+        configured_ = true;
+        return base_response(request, 200, "OK");
+    }
+
+    if (!crypto_.configure(parameters)) return base_response(request, 400, "Bad Request");
+    sdp_ = parsed;
     configured_ = true;
     auto response = base_response(request, 200, "OK");
     response.headers["Content-Length"] = "0";
