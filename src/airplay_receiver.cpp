@@ -4,6 +4,7 @@
 #include "airplay2/rtsp.h"
 
 #include <iomanip>
+#include <memory>
 #include <random>
 #include <sstream>
 
@@ -35,11 +36,10 @@ class AirPlayReceiver::Impl {
 public:
     HttpServer server;
     MdnsService mdns;
-    RtspSession rtsp;
     bool running = false;
     ReceiverConfig config;
 
-    HttpResponse handle(const HttpRequest& request) {
+    HttpResponse handle_request(const HttpRequest& request, RtspSession& rtsp) {
         if (is_rtsp_request(request)) {
             RtspRequest rtsp_request;
             rtsp_request.method = request.method;
@@ -87,11 +87,15 @@ bool AirPlayReceiver::start(const ReceiverConfig& config) {
 
     impl_->config = config;
     if (impl_->config.device_id.empty()) impl_->config.device_id = make_device_id();
-    impl_->rtsp.reset();
 
-    if (!impl_->server.start(config.port, [this](const HttpRequest& request) {
-            return impl_->handle(request);
-        })) return false;
+    const auto factory = [this]() -> HttpHandler {
+        auto session = std::make_shared<RtspSession>();
+        return [this, session = std::move(session)](const HttpRequest& request) {
+            return impl_->handle_request(request, *session);
+        };
+    };
+
+    if (!impl_->server.start_per_connection(config.port, factory)) return false;
 
     const std::vector<MdnsTxtRecord> records = {
         {"deviceid", impl_->config.device_id},
@@ -116,7 +120,6 @@ bool AirPlayReceiver::start(const ReceiverConfig& config) {
 void AirPlayReceiver::stop() {
     if (!impl_) return;
     impl_->mdns.unpublish();
-    impl_->rtsp.reset();
     impl_->server.stop();
     impl_->running = false;
 }
