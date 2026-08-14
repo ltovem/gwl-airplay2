@@ -15,6 +15,7 @@ add_library(gwl-airplay2
     src/mdns.cpp
     src/rtsp.cpp
     src/rtp.cpp
+    src/rtp_jitter_buffer.cpp
     src/sdp.cpp
     src/crypto.cpp
     src/crypto_session.cpp
