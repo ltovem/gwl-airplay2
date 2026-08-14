@@ -1,6 +1,7 @@
 #include "airplay2/http_server.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <cstring>
@@ -52,11 +53,10 @@ std::string header_value(const std::map<std::string, std::string>& headers, cons
 bool parse_request(std::string& input, HttpRequest& request) {
     const auto header_end = input.find("\r\n\r\n");
     if (header_end == std::string::npos) return false;
-
     const auto first_end = input.find("\r\n");
     if (first_end == std::string::npos || first_end > header_end) return false;
-    const auto first = input.substr(0, first_end);
-    std::istringstream first_stream(first);
+
+    std::istringstream first_stream(input.substr(0, first_end));
     if (!(first_stream >> request.method >> request.target >> request.protocol)) return false;
 
     request.headers.clear();
@@ -116,20 +116,19 @@ public:
                 std::string out = response.protocol + " " + std::to_string(response.status) + " " + response.reason + "\r\n";
                 if (!response.content_type.empty()) out += "Content-Type: " + response.content_type + "\r\n";
                 out += "Content-Length: " + std::to_string(response.body.size()) + "\r\n";
-                for (const auto& header : response.headers) {
-                    out += header.first + ": " + header.second + "\r\n";
-                }
+                for (const auto& header : response.headers) out += header.first + ": " + header.second + "\r\n";
                 out += "\r\n";
                 out += response.body;
 #ifdef _WIN32
-                if (::send(client, out.data(), static_cast<int>(out.size()), 0) <= 0) break;
+                if (::send(client, out.data(), static_cast<int>(out.size()), 0) <= 0) return;
 #else
-                if (::send(client, out.data(), out.size(), 0) <= 0) break;
+                if (::send(client, out.data(), out.size(), 0) <= 0) return;
 #endif
 
                 const auto connection = header_value(request.headers, "Connection");
-                if (connection == "close" || response.headers.find("Connection") != response.headers.end() &&
-                    response.headers.at("Connection") == "close") return;
+                if (connection == "close") return;
+                const auto response_connection = header_value(response.headers, "Connection");
+                if (response_connection == "close") return;
             }
         }
     }
