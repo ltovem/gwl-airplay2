@@ -1,12 +1,12 @@
 #include "airplay2/http_server.h"
 
-#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cctype>
 #include <cstring>
 #include <sstream>
 #include <thread>
+#include <utility>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -23,8 +23,8 @@ static constexpr socket_t invalid_socket = -1;
 #endif
 
 namespace gwl::airplay2 {
-
 namespace {
+
 #ifdef _WIN32
 void close_socket(socket_t s) { if (s != INVALID_SOCKET) closesocket(s); }
 #else
@@ -91,9 +91,10 @@ public:
     std::atomic<bool> running{false};
     socket_t listen_socket = invalid_socket;
     std::thread thread;
-    HttpHandler handler;
+    HttpHandlerFactory factory;
 
     void serve_client(socket_t client) {
+        HttpHandler handler = factory ? factory() : HttpHandler{};
         std::string input;
         input.reserve(16384);
         std::array<char, 8192> buffer{};
@@ -112,6 +113,7 @@ public:
                 if (!parse_request(input, request)) break;
                 HttpResponse response = handler ? handler(request) : HttpResponse{};
                 if (response.reason.empty()) response.reason = response.status == 200 ? "OK" : "Error";
+                if (response.protocol.empty()) response.protocol = request.protocol.empty() ? "HTTP/1.1" : request.protocol;
 
                 std::string out = response.protocol + " " + std::to_string(response.status) + " " + response.reason + "\r\n";
                 if (!response.content_type.empty()) out += "Content-Type: " + response.content_type + "\r\n";
@@ -142,7 +144,10 @@ public:
             socklen_t len = sizeof(addr);
 #endif
             socket_t client = ::accept(listen_socket, reinterpret_cast<sockaddr*>(&addr), &len);
-            if (client == invalid_socket) continue;
+            if (client == invalid_socket) {
+                if (!running.load()) break;
+                continue;
+            }
             serve_client(client);
             close_socket(client);
         }
@@ -153,12 +158,16 @@ HttpServer::HttpServer() : impl_(new Impl) {}
 HttpServer::~HttpServer() { stop(); delete impl_; }
 
 bool HttpServer::start(std::uint16_t port, HttpHandler handler) {
+    return start_per_connection(port, [handler = std::move(handler)] { return handler; });
+}
+
+bool HttpServer::start_per_connection(std::uint16_t port, HttpHandlerFactory factory) {
     if (impl_->running.exchange(true)) return false;
 #ifdef _WIN32
     WSADATA data{};
     if (WSAStartup(MAKEWORD(2, 2), &data) != 0) { impl_->running = false; return false; }
 #endif
-    impl_->handler = std::move(handler);
+    impl_->factory = std::move(factory);
     impl_->listen_socket = ::socket(AF_INET, SOCK_STREAM, 0);
     if (impl_->listen_socket == invalid_socket) { impl_->running = false; return false; }
 
