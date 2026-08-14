@@ -21,12 +21,21 @@ struct RtspResponse {
     std::string body;
 };
 
+struct RtpTransport {
+    std::uint16_t client_control_port = 0;
+    std::uint16_t client_timing_port = 0;
+    std::uint16_t server_control_port = 0;
+    std::uint16_t server_timing_port = 0;
+    std::uint16_t server_data_port = 0;
+};
+
 class RtspSession {
 public:
     RtspResponse handle(const RtspRequest& request);
 
     bool configured() const noexcept { return configured_; }
     bool recording() const noexcept { return recording_; }
+    const RtpTransport& transport() const noexcept { return transport_; }
 
 private:
     RtspResponse options(const RtspRequest& request);
@@ -38,6 +47,7 @@ private:
 
     bool configured_ = false;
     bool recording_ = false;
+    RtpTransport transport_{};
 };
 
 } // namespace gwl::airplay2
