@@ -9,12 +9,11 @@ bool NullAlacDecoder::configure(const AlacConfig& config) {
     return true;
 }
 
-bool NullAlacDecoder::decode(std::span<const std::uint8_t>, PcmAudioFrame& output) {
+bool NullAlacDecoder::decode(const std::vector<std::uint8_t>&, PcmAudioFrame& output) {
     // Deliberately does not pretend to decode compressed ALAC data. This backend
-    // is useful for wiring and tests until a real, licensed/software decoder is
-    // selected by the platform/application.
+    // is useful for wiring and tests until a real software decoder is selected.
     output = {};
-    return configured_ && false;
+    return false;
 }
 
 void NullAlacDecoder::reset() {
