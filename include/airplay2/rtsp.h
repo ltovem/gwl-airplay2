@@ -37,7 +37,11 @@ public:
     RtspSession();
     ~RtspSession();
 
+    RtspSession(const RtspSession&) = delete;
+    RtspSession& operator=(const RtspSession&) = delete;
+
     RtspResponse handle(const RtspRequest& request);
+    void reset();
 
     bool configured() const noexcept { return configured_; }
     bool recording() const noexcept { return recording_; }
