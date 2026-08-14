@@ -21,10 +21,12 @@ add_library(gwl-airplay2
     src/crypto.cpp
     src/crypto_session.cpp
     src/audio_pipeline.cpp
+    src/audio_clock.cpp
     src/callback_audio_sink.cpp
     src/platform.cpp
     src/platform_audio.cpp
     src/alac_config.cpp
+    src/alac_rtp.cpp
     src/alac_decoder.cpp
 )
 
