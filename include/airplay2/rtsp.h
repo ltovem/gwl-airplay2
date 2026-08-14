@@ -5,7 +5,9 @@
 #include <memory>
 #include <string>
 
+#include "airplay2/crypto_session.h"
 #include "airplay2/rtp.h"
+#include "airplay2/sdp.h"
 
 namespace gwl::airplay2 {
 
@@ -46,6 +48,8 @@ public:
     bool configured() const noexcept { return configured_; }
     bool recording() const noexcept { return recording_; }
     const RtpTransport& transport() const noexcept { return transport_; }
+    const AirPlaySdp& sdp() const noexcept { return sdp_; }
+    const CryptoSession& crypto() const noexcept { return crypto_; }
     RtpReceiver* media_receiver() noexcept { return media_receiver_.get(); }
 
 private:
@@ -62,6 +66,8 @@ private:
     bool configured_ = false;
     bool recording_ = false;
     RtpTransport transport_{};
+    AirPlaySdp sdp_{};
+    CryptoSession crypto_{};
     std::unique_ptr<RtpReceiver> media_receiver_;
 };
 
