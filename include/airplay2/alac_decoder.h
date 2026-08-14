@@ -3,7 +3,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <span>
 #include <vector>
 
 #include "airplay2/alac_config.h"
@@ -23,14 +22,14 @@ public:
     virtual ~AlacDecoder() = default;
 
     virtual bool configure(const AlacConfig& config) = 0;
-    virtual bool decode(std::span<const std::uint8_t> packet, PcmAudioFrame& output) = 0;
+    virtual bool decode(const std::vector<std::uint8_t>& packet, PcmAudioFrame& output) = 0;
     virtual void reset() = 0;
 };
 
 class NullAlacDecoder final : public AlacDecoder {
 public:
     bool configure(const AlacConfig& config) override;
-    bool decode(std::span<const std::uint8_t> packet, PcmAudioFrame& output) override;
+    bool decode(const std::vector<std::uint8_t>& packet, PcmAudioFrame& output) override;
     void reset() override;
 
 private:
