@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <string>
 #include <vector>
 
 namespace gwl::airplay2 {
@@ -25,13 +24,7 @@ struct AlacConfig {
     bool valid() const noexcept;
 };
 
-// Parse an Apple Lossless Specific Config (ALAC config atom payload).
-// The payload is expected to contain the 24-byte ALAC magic cookie body,
-// without the surrounding atom header.
+// Parse the 28-byte ALACSpecificConfig payload (magic cookie body).
 bool parse_alac_config(const std::vector<std::uint8_t>& data, AlacConfig& result);
-
-// Best-effort extraction of common ALAC parameters from an SDP fmtp string.
-// This intentionally does not guess missing codec fields.
-bool parse_alac_fmtp(const std::string& fmtp, AlacConfig& result);
 
 } // namespace gwl::airplay2
