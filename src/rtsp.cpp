@@ -1,4 +1,5 @@
 #include "airplay2/rtsp.h"
+#include "airplay2/sdp.h"
 
 #include <algorithm>
 #include <cctype>
@@ -76,7 +77,9 @@ RtspResponse RtspSession::options(const RtspRequest& request) {
 }
 
 RtspResponse RtspSession::announce(const RtspRequest& request) {
-    if (request.body.empty()) return base_response(request, 400, "Bad Request");
+    AirPlaySdp sdp;
+    if (!parse_sdp(request.body, sdp)) return base_response(request, 400, "Bad Request");
+    if (!sdp.has_audio() && !sdp.has_video()) return base_response(request, 415, "Unsupported Media Type");
     configured_ = true;
     auto response = base_response(request, 200, "OK");
     response.headers["Content-Length"] = "0";
