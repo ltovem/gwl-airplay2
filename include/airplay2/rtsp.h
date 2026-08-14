@@ -2,7 +2,10 @@
 
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <string>
+
+#include "airplay2/rtp.h"
 
 namespace gwl::airplay2 {
 
@@ -31,11 +34,15 @@ struct RtpTransport {
 
 class RtspSession {
 public:
+    RtspSession();
+    ~RtspSession();
+
     RtspResponse handle(const RtspRequest& request);
 
     bool configured() const noexcept { return configured_; }
     bool recording() const noexcept { return recording_; }
     const RtpTransport& transport() const noexcept { return transport_; }
+    RtpReceiver* media_receiver() noexcept { return media_receiver_.get(); }
 
 private:
     RtspResponse options(const RtspRequest& request);
@@ -48,6 +55,7 @@ private:
     bool configured_ = false;
     bool recording_ = false;
     RtpTransport transport_{};
+    std::unique_ptr<RtpReceiver> media_receiver_;
 };
 
 } // namespace gwl::airplay2
