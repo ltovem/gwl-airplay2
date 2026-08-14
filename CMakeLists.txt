@@ -16,6 +16,7 @@ add_library(gwl-airplay2
     src/rtsp.cpp
     src/rtp.cpp
     src/rtp_jitter_buffer.cpp
+    src/media_frame.cpp
     src/sdp.cpp
     src/crypto.cpp
     src/crypto_session.cpp
