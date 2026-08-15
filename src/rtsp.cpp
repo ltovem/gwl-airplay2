@@ -51,11 +51,14 @@ RtspSession::~RtspSession() = default;
 void RtspSession::reset() {
     recording_ = false;
     configured_ = false;
+    media_packet_handler_ = {};
+    if (media_receiver_) media_receiver_->clear_packet_handler();
+    if (media_receiver_) media_receiver_->close();
+    media_receiver_.reset();
+    jitter_buffer_.reset();
     transport_ = {};
     sdp_ = {};
     crypto_.reset();
-    if (media_receiver_) media_receiver_->close();
-    media_receiver_.reset();
 }
 
 RtspResponse RtspSession::handle(const RtspRequest& request) {
@@ -85,9 +88,6 @@ RtspResponse RtspSession::announce(const RtspRequest& request) {
 
     CryptoParameters parameters;
     if (!extract_crypto_parameters(parsed, parameters)) {
-        // Not every AirPlay negotiation uses the legacy SDP key/IV path. Keep
-        // the parsed SDP available so a future paired-session handshake can
-        // take over instead of pretending that crypto was negotiated.
         sdp_ = parsed;
         configured_ = true;
         return base_response(request, 200, "OK");
@@ -111,6 +111,13 @@ RtspResponse RtspSession::setup(const RtspRequest& request) {
     if (!media_receiver_->running() && !media_receiver_->bind(0)) {
         return base_response(request, 500, "Internal Server Error");
     }
+
+    // RTP packets are fed through the jitter buffer before being exposed to
+    // the media pipeline. The receiver thread owns this path, so callbacks
+    // never observe the same packet twice or out of sequence.
+    media_receiver_->set_packet_handler([this](const RtpPacket& packet) {
+        handle_media_packet(packet);
+    });
 
     transport_.server_data_port = media_receiver_->port();
     transport_.server_control_port = 0;
@@ -170,6 +177,23 @@ RtspResponse RtspSession::teardown(const RtspRequest& request) {
     response.headers["Session"] = "GWL-AIRPLAY-1";
     response.headers["Content-Length"] = "0";
     return response;
+}
+
+void RtspSession::set_media_packet_handler(MediaPacketHandler handler) {
+    media_packet_handler_ = std::move(handler);
+}
+
+void RtspSession::clear_media_packet_handler() {
+    media_packet_handler_ = {};
+}
+
+void RtspSession::handle_media_packet(const RtpPacket& packet) {
+    if (!recording_ && !configured_) return;
+    if (!jitter_buffer_.push(packet)) return;
+
+    while (auto ordered = jitter_buffer_.pop()) {
+        if (media_packet_handler_) media_packet_handler_(*ordered);
+    }
 }
 
 } // namespace gwl::airplay2
