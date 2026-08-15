@@ -9,6 +9,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(GWL_AIRPLAY2_BUILD_DEMO "Build the command line demo" ON)
 option(GWL_AIRPLAY2_BUILD_TESTS "Build tests" OFF)
 option(GWL_AIRPLAY2_BUILD_SHARED "Build a shared library" OFF)
+option(GWL_AIRPLAY2_ENABLE_OPENSSL "Enable portable AirPlay/HAP crypto backend" ON)
 
 set(GWL_AIRPLAY2_SOURCES
     src/airplay_receiver.cpp
@@ -21,6 +22,7 @@ set(GWL_AIRPLAY2_SOURCES
     src/sdp.cpp
     src/crypto.cpp
     src/crypto_session.cpp
+    src/airplay_pairing.cpp
     src/audio_pipeline.cpp
     src/alac_audio_pipeline.cpp
     src/audio_clock.cpp
@@ -40,6 +42,10 @@ set(GWL_AIRPLAY2_SOURCES
 
 if(APPLE)
     list(APPEND GWL_AIRPLAY2_SOURCES src/apple_audio_sink.cpp)
+endif()
+
+if(GWL_AIRPLAY2_ENABLE_OPENSSL)
+    find_package(OpenSSL REQUIRED COMPONENTS Crypto)
 endif()
 
 if(GWL_AIRPLAY2_BUILD_SHARED)
@@ -63,6 +69,11 @@ target_compile_definitions(gwl-airplay2
         GWL_AIRPLAY2_VERSION_MINOR=${PROJECT_VERSION_MINOR}
         GWL_AIRPLAY2_VERSION_PATCH=${PROJECT_VERSION_PATCH}
 )
+
+if(GWL_AIRPLAY2_ENABLE_OPENSSL)
+    target_link_libraries(gwl-airplay2 PRIVATE OpenSSL::Crypto)
+    target_compile_definitions(gwl-airplay2 PRIVATE GWL_AIRPLAY2_HAS_OPENSSL=1)
+endif()
 
 if(WIN32)
     target_link_libraries(gwl-airplay2 PRIVATE ws2_32)
