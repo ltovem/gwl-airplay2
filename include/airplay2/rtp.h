@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace gwl::airplay2 {
 
@@ -17,7 +18,7 @@ struct RtpPacket {
     std::uint32_t timestamp = 0;
     std::uint32_t ssrc = 0;
     bool marker = false;
-    std::string payload;
+    std::vector<std::uint8_t> payload;
 };
 
 class RtpReceiver {
