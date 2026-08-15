@@ -3,6 +3,7 @@
 #if defined(__APPLE__)
 
 #include <AudioToolbox/AudioToolbox.h>
+#include <TargetConditionals.h>
 
 #include <algorithm>
 #include <cstring>
@@ -44,16 +45,15 @@ struct AppleAudioSink::Impl {
             self->available -= take;
         }
 
-        AudioBufferList* out = io_data;
-        if (out->mNumberBuffers == 1) {
+        if (io_data->mNumberBuffers == 1) {
             const std::size_t bytes = requested * sizeof(std::int16_t);
-            const std::size_t capacity = out->mBuffers[0].mDataByteSize;
-            std::memcpy(out->mBuffers[0].mData, temp.data(), std::min(bytes, static_cast<std::size_t>(capacity)));
-            out->mBuffers[0].mDataByteSize = static_cast<UInt32>(std::min(bytes, static_cast<std::size_t>(capacity)));
+            const std::size_t capacity = io_data->mBuffers[0].mDataByteSize;
+            const std::size_t copy_bytes = std::min(bytes, capacity);
+            std::memcpy(io_data->mBuffers[0].mData, temp.data(), copy_bytes);
+            io_data->mBuffers[0].mDataByteSize = static_cast<UInt32>(copy_bytes);
         } else {
-            // Non-interleaved output is not requested by this sink.
-            for (UInt32 b = 0; b < out->mNumberBuffers; ++b) {
-                std::memset(out->mBuffers[b].mData, 0, out->mBuffers[b].mDataByteSize);
+            for (UInt32 b = 0; b < io_data->mNumberBuffers; ++b) {
+                std::memset(io_data->mBuffers[b].mData, 0, io_data->mBuffers[b].mDataByteSize);
             }
         }
         return noErr;
@@ -73,11 +73,10 @@ bool AppleAudioSink::open(const PcmFormat& format) {
     impl_->ring.assign(static_cast<std::size_t>(format.sample_rate) * format.channels * 2, 0);
 
     AudioComponentDescription desc{};
-#if TARGET_OS_OSX
     desc.componentType = kAudioUnitType_Output;
+#if TARGET_OS_OSX
     desc.componentSubType = kAudioUnitSubType_DefaultOutput;
 #else
-    desc.componentType = kAudioUnitType_Output;
     desc.componentSubType = kAudioUnitSubType_RemoteIO;
 #endif
     desc.componentManufacturer = kAudioUnitManufacturer_Apple;
