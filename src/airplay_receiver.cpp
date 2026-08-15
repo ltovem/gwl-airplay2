@@ -42,6 +42,13 @@ std::vector<std::uint8_t> hex_bytes(const char* text) {
     }
     return out;
 }
+std::string hex_preview(const std::string& body, std::size_t max_bytes = 256) {
+    std::ostringstream out; out << std::hex << std::setfill('0');
+    const auto n = std::min(body.size(), max_bytes);
+    for (std::size_t i = 0; i < n; ++i) { if (i) out << ' '; out << std::setw(2) << static_cast<unsigned int>(static_cast<unsigned char>(body[i])); }
+    if (body.size() > n) out << " ...";
+    return out.str();
+}
 
 const std::vector<std::uint8_t>& fairplay_v3_phase1_response() {
     static const auto response = hex_bytes(
@@ -74,18 +81,15 @@ std::vector<std::uint8_t> handle_fairplay_setup(const std::vector<std::uint8_t>&
 std::string initial_volume_binary_plist() {
     static const unsigned char bytes[] = {
         0x62,0x70,0x6c,0x69,0x73,0x74,0x30,0x30,0xd1,0x01,0x02,0x5d,0x69,0x6e,0x69,
-        0x74,0x69,0x61,0x6c,0x56,0x6f,0x6c,0x75,0x6d,0x65,0x13,0xff,0xff,0xff,0xff,0xff,
-        0xff,0x88,0x08,0x0b,0x19,0x00,0x00,0x00,0x00,0x00,0x00,0x01,0x01,0x00,0x00,0x00,
-        0x00,0x00,0x00,0x00,0x03,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-        0x00,0x00,0x00,0x22
+        0x74,0x69,0x61,0x6c,0x56,0x6f,0x6c,0x75,0x6d,0x65,0x13,0xff,0xff,0xff,0xff,
+        0xff,0xff,0xff,0xff,0x08,0x0b,0x19,0x00,0x00,0x00,0x00,0x00,0x00,0x01,
+        0x01,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x03,0x00,0x00,0x00,0x00,0x00,
+        0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x22
     };
     return std::string(reinterpret_cast<const char*>(bytes), sizeof(bytes));
 }
 
 std::string device_info_binary_plist(const std::string& device_id) {
-    // Valid binary plist generated from the AirPlay /info schema. The old
-    // hand-written plist advertised an unrelated feature integer, which made
-    // recent Apple senders drop the connection immediately after /info.
     static const char* hex =
         "62706c6973743030dc0102030405060708090a0b0c0d0e0f0f10111213141516175864657669636549445866656174757265735f10116b656570416c6976654c6f77506f7765725f10186b656570416c69766553656e6453746174734173426f64795c6d616e756661637475726572556d6f64656c546e616d655270695f100f70726f746f636f6c56657273696f6e5d736f7572636556657273696f6e5b737461747573466c6167735276765f101130303a30303a30303a30303a30303a3030130000001e5a7ffff7095347574c5a4170706c655456332c325f101047574c20416972506c61792044656d6f5f102430303030303030302d303030302d343030302d383030302d30303030303030303030303053312e31563232302e36381044100200080021002a003300470062006f0075007a007d008f009d00a900ac00c000c900ca00ce00d900ec01130117011e01200000000000000201000000000000001800000000000000000000000000000122";
     auto bytes = hex_bytes(hex);
@@ -96,11 +100,9 @@ std::string device_info_binary_plist(const std::string& device_id) {
         if (from.size() != to.size()) return false;
         const auto it = std::search(bytes.begin(), bytes.end(), from.begin(), from.end());
         if (it == bytes.end()) return false;
-        std::copy(to.begin(), to.end(), it);
-        return true;
+        std::copy(to.begin(), to.end(), it); return true;
     };
-    replace(device_placeholder, device_id);
-    replace(pi_placeholder, pi);
+    replace(device_placeholder, device_id); replace(pi_placeholder, pi);
     return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
 }
 }
@@ -114,71 +116,60 @@ public:
                                 AirPlayTransientPairing& transient,
                                 AirPlayHkpPairing& hkp,
                                 std::vector<std::uint8_t>& fairplay_key_message) {
-        log(request.method + " " + request.target);
+        log(request.method + " " + request.target + " body=" + std::to_string(request.body.size()));
+        if (!request.body.empty() && (request.target == "/info" || request.target == "/info/" || request.method == "SETUP")) log("[RX] body hex: " + hex_preview(request.body));
         if (request.target == "/info" || request.target == "/info/") {
             if (request.method != "GET") return response_for(405, "Method Not Allowed", request);
-            if (request.body.empty()) {
-                const std::string body = initial_volume_binary_plist();
-                HttpResponse r; r.status = 200; r.reason = "OK"; r.protocol = request.protocol.empty() ? "RTSP/1.0" : request.protocol;
-                r.headers["Content-Type"] = "application/x-apple-binary-plist";
-                r.headers["Content-Length"] = std::to_string(body.size()); r.body = body;
-                log("GET /info -> 200 (initialVolume binary plist)");
-                return r;
-            }
-            const std::string body = device_info_binary_plist(config.device_id);
-            log("GET /info -> 200 (device info binary plist, " + std::to_string(body.size()) + " bytes)");
+            const std::string body = request.body.empty() ? initial_volume_binary_plist() : device_info_binary_plist(config.device_id);
+            log(request.body.empty() ? "GET /info -> 200 initialVolume (VALID bplist)" : "GET /info -> 200 device info (bplist)");
+            log("[TX] /info body=" + std::to_string(body.size()) + " hex: " + hex_preview(body));
             HttpResponse r; r.status = 200; r.reason = "OK"; r.protocol = request.protocol.empty() ? "RTSP/1.0" : request.protocol;
-            r.headers["Content-Type"] = "application/x-apple-binary-plist";
-            r.headers["Content-Length"] = std::to_string(body.size()); r.body = body; return r;
+            r.headers["Content-Type"] = "application/x-apple-binary-plist"; r.headers["Content-Length"] = std::to_string(body.size()); r.body = body; return r;
         }
         if (request.target == "/pair-setup") {
             if (request.method != "POST") return response_for(405, "Method Not Allowed", request);
             std::vector<std::uint8_t> body(request.body.begin(), request.body.end()); std::vector<std::uint8_t> response; std::string error;
             if (body.size() == 32) {
                 if (!hkp.handle_pair_setup(body, response, error)) { log("[Pairing] HKP /pair-setup failed: " + error); return response_for(400, "Bad Request", request); }
-                HttpResponse r; r.status = 200; r.reason = "OK"; r.protocol = "RTSP/1.0"; r.headers["Content-Type"] = "application/octet-stream"; r.headers["Content-Length"] = std::to_string(response.size()); r.body.assign(reinterpret_cast<const char*>(response.data()), response.size()); log("[Pairing] HKP /pair-setup -> 200 (Ed25519 public key, 32 bytes)"); return r;
+                HttpResponse r; r.status=200; r.reason="OK"; r.protocol="RTSP/1.0"; r.headers["Content-Type"]="application/octet-stream"; r.headers["Content-Length"]=std::to_string(response.size()); r.body.assign(reinterpret_cast<const char*>(response.data()),response.size()); log("[Pairing] HKP /pair-setup -> 200"); return r;
             }
-            if (!transient.handle(body, response, error)) { log("[Pairing] /pair-setup failed: " + error); return response_for(400, "Bad Request", request); }
-            HttpResponse r; r.status = 200; r.reason = "OK"; r.protocol = "RTSP/1.0"; r.headers["Content-Type"] = "application/octet-stream"; r.headers["Content-Length"] = std::to_string(response.size()); r.body.assign(reinterpret_cast<const char*>(response.data()), response.size()); if (transient.complete()) log("[Pairing] transient Pair-Setup M4 complete; SRP shared secret established"); return r;
+            if (!transient.handle(body,response,error)) { log("[Pairing] /pair-setup failed: "+error); return response_for(400,"Bad Request",request); }
+            HttpResponse r; r.status=200; r.reason="OK"; r.protocol="RTSP/1.0"; r.headers["Content-Type"]="application/octet-stream"; r.headers["Content-Length"]=std::to_string(response.size()); r.body.assign(reinterpret_cast<const char*>(response.data()),response.size()); return r;
         }
         if (request.target == "/pair-verify") {
-            if (request.method != "POST") return response_for(405, "Method Not Allowed", request);
-            std::vector<std::uint8_t> body(request.body.begin(), request.body.end()); std::vector<std::uint8_t> response; std::string error;
-            if (!hkp.handle_pair_verify(body, response, error)) { log("[Pairing] HKP /pair-verify failed: " + error); return response_for(400, "Bad Request", request); }
-            HttpResponse r; r.status = 200; r.reason = "OK"; r.protocol = "RTSP/1.0"; r.headers["Content-Type"] = "application/octet-stream"; r.headers["Content-Length"] = std::to_string(response.size()); r.body.assign(reinterpret_cast<const char*>(response.data()), response.size()); if (hkp.verified()) log("[Pairing] HKP /pair-verify verified"); return r;
+            if (request.method != "POST") return response_for(405,"Method Not Allowed",request);
+            std::vector<std::uint8_t> body(request.body.begin(),request.body.end()); std::vector<std::uint8_t> response; std::string error;
+            if (!hkp.handle_pair_verify(body,response,error)) { log("[Pairing] HKP /pair-verify failed: "+error); return response_for(400,"Bad Request",request); }
+            HttpResponse r; r.status=200; r.reason="OK"; r.protocol="RTSP/1.0"; r.headers["Content-Type"]="application/octet-stream"; r.headers["Content-Length"]=std::to_string(response.size()); r.body.assign(reinterpret_cast<const char*>(response.data()),response.size()); if(hkp.verified()) log("[Pairing] HKP /pair-verify verified"); return r;
         }
         if (request.target == "/fp-setup") {
-            if (request.method != "POST") return response_for(405, "Method Not Allowed", request);
-            const std::vector<std::uint8_t> body(request.body.begin(), request.body.end()); std::string error; const auto response = handle_fairplay_setup(body, fairplay_key_message, error);
-            if (response.empty()) { log("[FairPlay] /fp-setup failed: " + error); return response_for(400, "Bad Request", request); }
-            HttpResponse r; r.status = 200; r.reason = "OK"; r.protocol = "RTSP/1.0"; r.headers["Content-Type"] = "application/octet-stream"; r.headers["Content-Length"] = std::to_string(response.size()); r.body.assign(reinterpret_cast<const char*>(response.data()), response.size()); if (body[6] == 1) log("[FairPlay] v3 /fp-setup phase 1 -> 200 (142 bytes)"); else log("[FairPlay] v3 /fp-setup phase 3 -> 200 (32 bytes; key message stored)"); return r;
+            if (request.method != "POST") return response_for(405,"Method Not Allowed",request);
+            const std::vector<std::uint8_t> body(request.body.begin(),request.body.end()); std::string error; const auto response=handle_fairplay_setup(body,fairplay_key_message,error);
+            if(response.empty()){log("[FairPlay] /fp-setup failed: "+error);return response_for(400,"Bad Request",request);}
+            HttpResponse r; r.status=200; r.reason="OK"; r.protocol="RTSP/1.0"; r.headers["Content-Type"]="application/octet-stream"; r.headers["Content-Length"]=std::to_string(response.size()); r.body.assign(reinterpret_cast<const char*>(response.data()),response.size()); if(body[6]==1)log("[FairPlay] phase 1 -> 200");else log("[FairPlay] phase 3 -> 200"); return r;
         }
         if (is_rtsp_media_request(request)) {
-            RtspRequest rr; rr.method = request.method; rr.uri = request.target; rr.body = request.body; rr.headers = request.headers;
-            const auto cseq = request.headers.find("CSeq"); if (cseq != request.headers.end()) { try { rr.cseq = std::stoi(cseq->second); } catch (...) { rr.cseq = 0; } }
-            const auto rs = rtsp.handle(rr); log("RTSP " + std::to_string(rs.status) + " " + rs.reason);
-            HttpResponse r; r.status = rs.status; r.reason = rs.reason; r.protocol = "RTSP/1.0"; r.content_type.clear(); r.headers = rs.headers; r.body = rs.body; return r;
+            RtspRequest rr; rr.method=request.method; rr.uri=request.target; rr.body=request.body; rr.headers=request.headers;
+            const auto cseq=request.headers.find("CSeq"); if(cseq!=request.headers.end()){try{rr.cseq=std::stoi(cseq->second);}catch(...){rr.cseq=0;}}
+            const auto rs=rtsp.handle(rr);
+            log("[RTSP] " + request.method + " CSeq=" + std::to_string(rr.cseq) + " -> " + std::to_string(rs.status) + " " + rs.reason + " response_body=" + std::to_string(rs.body.size()));
+            if(!rs.body.empty()) log("[TX] RTSP body hex: "+hex_preview(rs.body));
+            HttpResponse r; r.status=rs.status; r.reason=rs.reason; r.protocol="RTSP/1.0"; r.content_type.clear(); r.headers=rs.headers; r.body=rs.body; return r;
         }
-        return response_for(404, "Not Found", request);
+        return response_for(404,"Not Found",request);
     }
 };
 
-AirPlayReceiver::AirPlayReceiver() : impl_(std::make_unique<Impl>()) {}
-AirPlayReceiver::~AirPlayReceiver() { stop(); }
-
-bool AirPlayReceiver::start(const ReceiverConfig& config) {
-    if (impl_->running) return false; impl_->config = config; if (impl_->config.device_id.empty()) impl_->config.device_id = make_device_id(); impl_->protocol_identity = make_pi(impl_->config.device_id); impl_->log("Starting receiver '" + impl_->config.device_name + "'"); impl_->log("HTTP/RTSP port: " + std::to_string(impl_->config.port));
-    const auto factory = [this]() -> HttpHandler {
-        auto session = std::make_shared<RtspSession>(); auto transient = std::make_shared<AirPlayTransientPairing>(); auto hkp = std::make_shared<AirPlayHkpPairing>(); auto fairplay_key_message = std::make_shared<std::vector<std::uint8_t>>();
-        session->set_log_handler([this](const std::string& message) { impl_->log(message); });
-        if (impl_->config.audio_sink_factory) { auto sink = impl_->config.audio_sink_factory(); if (sink) session->set_alac_audio_pipeline(std::make_unique<AlacAudioPipeline>(create_software_alac_decoder(), std::move(sink))); }
-        return [this, session = std::move(session), transient = std::move(transient), hkp = std::move(hkp), fairplay_key_message = std::move(fairplay_key_message)](const HttpRequest& request) { return impl_->handle_request(request, *session, *transient, *hkp, *fairplay_key_message); };
-    };
-    if (!impl_->server.start_per_connection(config.port, factory)) { impl_->log("ERROR: failed to bind HTTP/RTSP server"); return false; }
-    const std::vector<MdnsTxtRecord> records = {{"deviceid", impl_->config.device_id}, {"model", "AppleTV3,2"}, {"srcvers", "220.68"}, {"protovers", "1.1"}, {"features", "0x5A7FFFF7,0x1E"}, {"flags", "0x44"}, {"vv", "2"}, {"pi", impl_->protocol_identity}, {"pw", "false"}};
-    if (!impl_->mdns.publish(impl_->config.device_name, impl_->config.port, records)) { impl_->log("ERROR: failed to publish _airplay._tcp via mDNS"); impl_->server.stop(); return false; }
-    impl_->running = true; impl_->log("Published _airplay._tcp"); impl_->log("Device ID: " + impl_->config.device_id); impl_->log("AirPlay model: AppleTV3,2"); impl_->log("AirPlay features: 0x5A7FFFF7,0x1E (video + screen mirroring + audio)"); impl_->log("Waiting for AirPlay connection..."); return true;
+AirPlayReceiver::AirPlayReceiver():impl_(std::make_unique<Impl>()){}
+AirPlayReceiver::~AirPlayReceiver(){stop();}
+bool AirPlayReceiver::start(const ReceiverConfig& config){
+    if(impl_->running)return false; impl_->config=config; if(impl_->config.device_id.empty())impl_->config.device_id=make_device_id(); impl_->protocol_identity=make_pi(impl_->config.device_id); impl_->log("Starting receiver '"+impl_->config.device_name+"'"); impl_->log("HTTP/RTSP port: "+std::to_string(impl_->config.port));
+    const auto factory=[this]()->HttpHandler{auto session=std::make_shared<RtspSession>();auto transient=std::make_shared<AirPlayTransientPairing>();auto hkp=std::make_shared<AirPlayHkpPairing>();auto fairplay_key_message=std::make_shared<std::vector<std::uint8_t>>();session->set_log_handler([this](const std::string& message){impl_->log(message);});if(impl_->config.audio_sink_factory){auto sink=impl_->config.audio_sink_factory();if(sink)session->set_alac_audio_pipeline(std::make_unique<AlacAudioPipeline>(create_software_alac_decoder(),std::move(sink)));}return [this,session=std::move(session),transient=std::move(transient),hkp=std::move(hkp),fairplay_key_message=std::move(fairplay_key_message)](const HttpRequest& request){return impl_->handle_request(request,*session,*transient,*hkp,*fairplay_key_message);};};
+    if(!impl_->server.start_per_connection(config.port,factory)){impl_->log("ERROR: failed to bind HTTP/RTSP server");return false;}
+    const std::vector<MdnsTxtRecord> records={{"deviceid",impl_->config.device_id},{"model","AppleTV3,2"},{"srcvers","220.68"},{"protovers","1.1"},{"features","0x5A7FFFF7,0x1E"},{"flags","0x44"},{"vv","2"},{"pi",impl_->protocol_identity},{"pw","false"}};
+    if(!impl_->mdns.publish(impl_->config.device_name,impl_->config.port,records)){impl_->log("ERROR: failed to publish _airplay._tcp via mDNS");impl_->server.stop();return false;}
+    impl_->running=true;impl_->log("Published _airplay._tcp");impl_->log("Device ID: "+impl_->config.device_id);impl_->log("AirPlay model: AppleTV3,2");impl_->log("AirPlay features: 0x5A7FFFF7,0x1E (video + screen mirroring + audio)");impl_->log("Waiting for AirPlay connection...");return true;
 }
-void AirPlayReceiver::stop() { if (!impl_) return; if (impl_->running) impl_->log("Stopping receiver"); impl_->mdns.unpublish(); impl_->server.stop(); impl_->running = false; }
-bool AirPlayReceiver::running() const noexcept { return impl_ && impl_->running; }
+void AirPlayReceiver::stop(){if(!impl_)return;if(impl_->running)impl_->log("Stopping receiver");impl_->mdns.unpublish();impl_->server.stop();impl_->running=false;}
+bool AirPlayReceiver::running()const noexcept{return impl_&&impl_->running;}
 } // namespace gwl::airplay2
