@@ -21,7 +21,7 @@ namespace gwl::airplay2 {
 namespace {
 constexpr std::uint16_t kMdnsPort = 5353;
 constexpr std::uint32_t kMdnsAddress = 0xE00000FBu;
-constexpr std::uint32_t kTtl = 120;
+constexpr std::uint32_t kTtl = 4500;
 
 void u16(std::vector<std::uint8_t>& b, std::uint16_t v) {
     b.push_back(static_cast<std::uint8_t>(v >> 8));
@@ -84,7 +84,8 @@ public:
     std::vector<std::uint8_t> make_response() const {
         const std::string service = instance + "._airplay._tcp.local";
         std::vector<std::uint8_t> packet;
-        // Unsolicited/response packet: PTR + SRV + TXT + A.
+        // PTR + SRV + TXT + A are returned together. This lets an AirPlay
+        // sender discover the service and immediately resolve its endpoint.
         header(packet, 0x8400, 0, 4);
 
         name(packet, "_airplay._tcp.local");
@@ -155,11 +156,11 @@ public:
             if (!active.load()) break;
             if (n < 12) continue;
 
-            // We only need to know that this is a DNS query for the AirPlay
-            // service. A full DNS name decompressor is unnecessary because
-            // the responder always answers with its complete authoritative set.
+            // AirPlay discovery queries contain the _airplay service name.
+            // Answer directly to the querying sender; the response contains
+            // the complete PTR/SRV/TXT/A set rather than relying on cache state.
             bool query_for_airplay = false;
-            for (int i = 12; i + 18 < n; ++i) {
+            for (int i = 12; i + 8 <= n; ++i) {
                 if (std::memcmp(buffer + i, "_airplay", 8) == 0) {
                     query_for_airplay = true;
                     break;
@@ -195,6 +196,15 @@ bool MdnsService::publish(const std::string& instance_name, std::uint16_t servic
         unpublish();
         return false;
     }
+#if !defined(_WIN32) && defined(SO_REUSEPORT)
+    // macOS already has mDNSResponder bound to UDP/5353. SO_REUSEPORT is
+    // required so a user-space responder can share the multicast socket.
+    if (setsockopt(impl_->socket_fd, SOL_SOCKET, SO_REUSEPORT,
+                   reinterpret_cast<const char*>(&reuse), sizeof(reuse)) != 0) {
+        unpublish();
+        return false;
+    }
+#endif
 
     sockaddr_in bind_addr{};
     bind_addr.sin_family = AF_INET;
@@ -214,9 +224,8 @@ bool MdnsService::publish(const std::string& instance_name, std::uint16_t servic
         return false;
     }
 
-    // Discover the IPv4 address used for the normal LAN interface without
-    // sending any packets. This address is placed in the A record for the
-    // SRV target so senders can connect to the advertised RTSP port.
+    // Discover the IPv4 address used for the LAN interface without sending
+    // application data. The address becomes the A record for the SRV target.
     {
         const Socket probe = static_cast<Socket>(::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP));
         if (probe != kInvalidSocket) {
@@ -239,9 +248,7 @@ bool MdnsService::publish(const std::string& instance_name, std::uint16_t servic
             close_socket(probe);
         }
     }
-    if (impl_->local_address == 0) {
-        impl_->local_address = htonl(INADDR_LOOPBACK);
-    }
+    if (impl_->local_address == 0) impl_->local_address = htonl(INADDR_LOOPBACK);
 
 #if defined(_WIN32)
     const DWORD ttl = 255;
@@ -259,8 +266,7 @@ bool MdnsService::publish(const std::string& instance_name, std::uint16_t servic
     impl_->active.store(true);
     impl_->responder = std::thread([this] { impl_->run(); });
 
-    // Send unsolicited announcement as soon as we start, then let the query
-    // responder handle subsequent iPhone/iPad discovery queries.
+    // Initial unsolicited announcement plus query-based responses.
     impl_->send_response();
     return true;
 }
