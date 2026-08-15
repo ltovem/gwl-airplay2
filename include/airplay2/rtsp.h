@@ -6,6 +6,7 @@
 #include <memory>
 #include <string>
 
+#include "airplay2/alac_audio_pipeline.h"
 #include "airplay2/crypto_session.h"
 #include "airplay2/rtp.h"
 #include "airplay2/rtp_jitter_buffer.h"
@@ -57,10 +58,17 @@ public:
     const RtpStreamStats& media_stats() const noexcept { return jitter_buffer_.stats(); }
     RtpReceiver* media_receiver() noexcept { return media_receiver_.get(); }
 
-    // Receives packets after RTP parsing and jitter-buffer ordering. The
-    // callback is invoked on the RTP receiver worker thread.
     void set_media_packet_handler(MediaPacketHandler handler);
     void clear_media_packet_handler();
+
+    // Installs an optional unprotected ALAC media pipeline. The session owns
+    // the pipeline and feeds it packets after RTP ordering. Protected media
+    // remains outside this path until a supported key/decryption layer is
+    // explicitly provided by the application.
+    void set_alac_audio_pipeline(std::unique_ptr<AlacAudioPipeline> pipeline);
+    bool audio_pipeline_configured() const noexcept {
+        return alac_audio_pipeline_ && alac_audio_pipeline_->configured();
+    }
 
 private:
     RtspResponse options(const RtspRequest& request);
@@ -83,6 +91,7 @@ private:
     std::unique_ptr<RtpReceiver> media_receiver_;
     RtpJitterBuffer jitter_buffer_{};
     MediaPacketHandler media_packet_handler_;
+    std::unique_ptr<AlacAudioPipeline> alac_audio_pipeline_;
 };
 
 } // namespace gwl::airplay2
