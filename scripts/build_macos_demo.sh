@@ -29,11 +29,18 @@ cmake -S "${ROOT_DIR}" -B "${BUILD_DIR}" \
   -DGWL_AIRPLAY2_BUILD_DEMO=ON \
   -DGWL_AIRPLAY2_BUILD_TESTS=ON
 
-cmake --build "${BUILD_DIR}" --config "${BUILD_TYPE}" --target gwl-airplay2-macos-demo gwl-airplay2-tests --parallel "$(sysctl -n hw.logicalcpu)"
+cmake --build "${BUILD_DIR}" --config "${BUILD_TYPE}" \
+  --target gwl-airplay2-macos-ui gwl-airplay2-macos-demo gwl-airplay2-tests \
+  --parallel "$(sysctl -n hw.logicalcpu)"
 
 ctest --test-dir "${BUILD_DIR}" -C "${BUILD_TYPE}" --output-on-failure
 
+APP_PATH="${BUILD_DIR}/gwl-airplay2-macos-ui.app"
+if [[ ! -d "${APP_PATH}" ]]; then
+  echo "ERROR: macOS UI bundle was not produced: ${APP_PATH}" >&2
+  exit 1
+fi
+
 echo
-echo "Starting gwl-airplay2-macos-demo..."
-echo "Press Ctrl-C to stop."
-exec "${BUILD_DIR}/gwl-airplay2-macos-demo"
+echo "Launching GWL AirPlay Receiver UI..."
+open -W "${APP_PATH}"
