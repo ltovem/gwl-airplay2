@@ -7,6 +7,7 @@
 
 #ifdef GWL_AIRPLAY2_HAS_OPENSSL
 #include <openssl/bn.h>
+#include <openssl/crypto.h>
 #include <openssl/rand.h>
 #include <openssl/sha.h>
 #endif
@@ -177,7 +178,7 @@ bool AirPlayTransientPairing::handle(const std::vector<std::uint8_t>& request,
             BN_CTX_free(ctx); error = "secure random generation failed"; return false;
         }
 
-        // HAP SRP uses username "Pair-Setup" and the screenless transient code 3939.
+        // HAP transient pairing for screenless AirPlay receivers uses PIN 3939.
         const auto up = std::vector<std::uint8_t>{'P','a','i','r','-','S','e','t','u','p',':','3','9','3','9'};
         const auto inner = sha512(up);
         const auto x_bytes = sha512(concat({impl_->salt, inner}));
@@ -189,18 +190,11 @@ bool AirPlayTransientPairing::handle(const std::vector<std::uint8_t>& request,
             BN_free(x); BN_free(vtmp); BN_free(gb); BN_free(kbn); BN_CTX_free(ctx);
             error = "SRP temporary allocation failed"; return false;
         }
-        const auto hn = sha512(std::vector<std::uint8_t>(kN.begin(), kN.end()));
-        const auto hg = sha512(std::vector<std::uint8_t>(kN.size() - 1, 0));
-        // g is padded to the SRP modulus width before hashing.
         std::vector<std::uint8_t> gpad(kN.size(), 0); gpad.back() = 5;
-        const auto hg2 = sha512(gpad);
         const auto k_hash = sha512(concat({std::vector<std::uint8_t>(kN.begin(), kN.end()), gpad}));
-        (void)hn; (void)hg; (void)hg2;
         BN_mod_exp(vtmp, impl_->g, x, impl_->N, ctx);
         BN_copy(impl_->v, vtmp);
-        BN_free(x);
-        BN_free(vtmp);
-        // k = H(N || PAD(g)), interpreted as an integer.
+        BN_free(x); BN_free(vtmp);
         BN_bin2bn(k_hash.data(), static_cast<int>(k_hash.size()), kbn);
         std::array<unsigned char, 256> braw{};
         if (RAND_bytes(braw.data(), static_cast<int>(braw.size())) != 1) {
@@ -251,10 +245,10 @@ bool AirPlayTransientPairing::handle(const std::vector<std::uint8_t>& request,
         shared_secret_ = K;
 
         std::vector<std::uint8_t> xor_ng(64);
-        const auto hn2 = sha512(std::vector<std::uint8_t>(kN.begin(), kN.end()));
+        const auto hn = sha512(std::vector<std::uint8_t>(kN.begin(), kN.end()));
         std::vector<std::uint8_t> gpad(kN.size(), 0); gpad.back() = 5;
-        const auto hg2 = sha512(gpad);
-        for (std::size_t i = 0; i < xor_ng.size(); ++i) xor_ng[i] = hn2[i] ^ hg2[i];
+        const auto hg = sha512(gpad);
+        for (std::size_t i = 0; i < xor_ng.size(); ++i) xor_ng[i] = hn[i] ^ hg[i];
         const auto hi = sha512(std::vector<std::uint8_t>{'P','a','i','r','-','S','e','t','u','p'});
         const auto M1 = sha512(concat({xor_ng, hi, impl_->salt, bn_pad(A), impl_->B_bytes, K}));
         if (!equal_bytes(M1, *proof)) {
