@@ -19,9 +19,12 @@ int main() {
     gwl::airplay2::ReceiverConfig config;
     config.device_name = "GWL AirPlay Demo";
     config.enable_audio = true;
-    config.enable_video = false;
+    config.enable_video = true;
     config.audio_sink_factory = [] {
         return std::make_unique<gwl::airplay2::AppleAudioSink>();
+    };
+    config.log_callback = [](const std::string& message) {
+        std::cout << "[AirPlay] " << message << std::endl;
     };
 
     gwl::airplay2::AirPlayReceiver receiver;
@@ -31,7 +34,7 @@ int main() {
     }
 
     std::cout << "GWL AirPlay macOS demo is running as '" << config.device_name << "'.\n";
-    std::cout << "Select it from AirPlay on an Apple device to test audio reception.\n";
+    std::cout << "Select it from AirPlay / Screen Mirroring on an Apple device.\n";
     std::cout << "Press Ctrl-C to stop.\n";
 
     while (g_running && receiver.running()) {
