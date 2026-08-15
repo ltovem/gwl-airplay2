@@ -116,6 +116,7 @@ class HttpServer::Impl {
 public:
     std::atomic<bool> running{false};
     socket_t listen_socket = invalid_socket;
+    std::uint16_t bound_port = 0;
     std::thread thread;
     HttpHandlerFactory factory;
 
@@ -230,7 +231,20 @@ bool HttpServer::start_per_connection(std::uint16_t port, HttpHandlerFactory fac
 #endif
         return false;
     }
-    std::cerr << "[HTTP] listening on 0.0.0.0:" << port << std::endl;
+
+    sockaddr_in actual{};
+#ifdef _WIN32
+    int actual_len = sizeof(actual);
+#else
+    socklen_t actual_len = sizeof(actual);
+#endif
+    if (::getsockname(impl_->listen_socket, reinterpret_cast<sockaddr*>(&actual), &actual_len) == 0) {
+        impl_->bound_port = ntohs(actual.sin_port);
+    } else {
+        impl_->bound_port = port;
+    }
+
+    std::cerr << "[HTTP] listening on 0.0.0.0:" << impl_->bound_port << std::endl;
     impl_->thread = std::thread([this] { impl_->serve(); });
     return true;
 }
@@ -239,6 +253,7 @@ void HttpServer::stop() {
     if (!impl_ || !impl_->running.exchange(false)) return;
     close_socket(impl_->listen_socket);
     impl_->listen_socket = invalid_socket;
+    impl_->bound_port = 0;
     if (impl_->thread.joinable()) impl_->thread.join();
 #ifdef _WIN32
     WSACleanup();
@@ -246,5 +261,6 @@ void HttpServer::stop() {
 }
 
 bool HttpServer::running() const noexcept { return impl_->running.load(); }
+std::uint16_t HttpServer::port() const noexcept { return impl_->bound_port; }
 
 } // namespace gwl::airplay2
