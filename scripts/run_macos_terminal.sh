@@ -11,7 +11,14 @@ echo "==> Pull latest source"
 git pull --ff-only
 
 echo "==> Configure"
-cmake -S . -B "${BUILD_DIR}" -DCMAKE_BUILD_TYPE=Debug -DGWL_AIRPLAY2_BUILD_DEMO=ON
+CMAKE_EXTRA=()
+if command -v brew >/dev/null 2>&1; then
+    if OPENSSL_PREFIX="$(brew --prefix openssl@3 2>/dev/null)"; then
+        CMAKE_EXTRA+=("-DOPENSSL_ROOT_DIR=${OPENSSL_PREFIX}")
+        echo "==> Using Homebrew OpenSSL: ${OPENSSL_PREFIX}"
+    fi
+fi
+cmake -S . -B "${BUILD_DIR}" -DCMAKE_BUILD_TYPE=Debug -DGWL_AIRPLAY2_BUILD_DEMO=ON "${CMAKE_EXTRA[@]}"
 
 echo "==> Build"
 cmake --build "${BUILD_DIR}" --config Debug -j"${JOBS}"
