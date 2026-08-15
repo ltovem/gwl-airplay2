@@ -4,16 +4,32 @@
 #include <array>
 #include <cstring>
 
+#ifdef GWL_AIRPLAY2_HAS_OPENSSL
 #include <openssl/srp.h>
 #include <openssl/rand.h>
+#endif
 
 namespace gwl::airplay2 {
+
+#ifndef GWL_AIRPLAY2_HAS_OPENSSL
+
+struct AirPlayTransientPairing::Impl {};
+AirPlayTransientPairing::AirPlayTransientPairing() : impl_(new Impl) {}
+AirPlayTransientPairing::~AirPlayTransientPairing() { delete impl_; }
+void AirPlayTransientPairing::reset() { complete_ = false; shared_secret_.clear(); }
+bool AirPlayTransientPairing::handle(const std::vector<std::uint8_t>&,
+                                     std::vector<std::uint8_t>& response,
+                                     std::string& error) {
+    response.clear();
+    error = "no portable crypto backend is configured for this target";
+    return false;
+}
+
+#else
+
 namespace {
 
-struct Tlv {
-    std::uint8_t type;
-    std::vector<std::uint8_t> value;
-};
+struct Tlv { std::uint8_t type; std::vector<std::uint8_t> value; };
 
 std::vector<Tlv> decode_tlv(const std::vector<std::uint8_t>& input) {
     std::vector<Tlv> out;
@@ -34,7 +50,6 @@ const std::vector<std::uint8_t>* find_tlv(const std::vector<Tlv>& tlvs, std::uin
 }
 
 void add_tlv(std::vector<std::uint8_t>& out, std::uint8_t type, const std::vector<std::uint8_t>& value) {
-    // HAP TLV8 fragments values larger than 255 bytes into adjacent records.
     std::size_t offset = 0;
     do {
         const auto n = std::min<std::size_t>(255, value.size() - offset);
@@ -50,19 +65,10 @@ std::vector<std::uint8_t> one_byte(std::uint8_t v) { return {v}; }
 class SrpHolder {
 public:
     SRP* srp = nullptr;
-    SRP* create() {
-        destroy();
-        srp = SRP_new(SRP6a_server_method());
-        return srp;
-    }
-    void destroy() {
-        if (srp) SRP_free(srp);
-        srp = nullptr;
-    }
-    ~SrpHolder() { destroy(); }
+    ~SrpHolder() { if (srp) SRP_free(srp); }
+    void reset() { if (srp) SRP_free(srp); srp = nullptr; }
 };
 
-// RFC 5054 3072-bit group, required by HAP.
 const std::array<unsigned char, 384> kN = [] {
     const char* hex =
         "FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E08"
@@ -75,14 +81,13 @@ const std::array<unsigned char, 384> kN = [] {
         "180E86039B2783A2EC07A28FB5C55DF06F4C52C9DE2BCBF695581718"
         "3995497CEA956AE515D2261898FA3A8A0AACAA68FFFFFFFFFFFFFFFF";
     std::array<unsigned char, 384> bytes{};
-    for (std::size_t i = 0; i < bytes.size(); ++i) {
-        auto nibble = [](char c) -> unsigned char {
-            if (c >= '0' && c <= '9') return static_cast<unsigned char>(c - '0');
-            if (c >= 'A' && c <= 'F') return static_cast<unsigned char>(c - 'A' + 10);
-            return static_cast<unsigned char>(c - 'a' + 10);
-        };
+    auto nibble = [](char c) -> unsigned char {
+        if (c >= '0' && c <= '9') return static_cast<unsigned char>(c - '0');
+        if (c >= 'A' && c <= 'F') return static_cast<unsigned char>(c - 'A' + 10);
+        return static_cast<unsigned char>(c - 'a' + 10);
+    };
+    for (std::size_t i = 0; i < bytes.size(); ++i)
         bytes[i] = static_cast<unsigned char>((nibble(hex[i * 2]) << 4) | nibble(hex[i * 2 + 1]));
-    }
     return bytes;
 }();
 
@@ -93,20 +98,18 @@ struct AirPlayTransientPairing::Impl {
     std::vector<std::uint8_t> salt;
     std::vector<std::uint8_t> server_key;
     bool m2_sent = false;
-    bool m4_sent = false;
 };
 
 AirPlayTransientPairing::AirPlayTransientPairing() : impl_(new Impl) {}
 AirPlayTransientPairing::~AirPlayTransientPairing() { delete impl_; }
 
 void AirPlayTransientPairing::reset() {
-    impl_->srp.destroy();
+    impl_->srp.reset();
     impl_->salt.clear();
     impl_->server_key.clear();
     shared_secret_.clear();
     complete_ = false;
     impl_->m2_sent = false;
-    impl_->m4_sent = false;
 }
 
 bool AirPlayTransientPairing::handle(const std::vector<std::uint8_t>& request,
@@ -116,7 +119,6 @@ bool AirPlayTransientPairing::handle(const std::vector<std::uint8_t>& request,
     error.clear();
     const auto tlvs = decode_tlv(request);
     if (tlvs.empty()) { error = "invalid TLV8"; return false; }
-
     const auto* state = find_tlv(tlvs, 0x06);
     if (!state || state->empty()) { error = "missing pairing state"; return false; }
 
@@ -131,7 +133,7 @@ bool AirPlayTransientPairing::handle(const std::vector<std::uint8_t>& request,
         }
 
         reset();
-        impl_->srp.create();
+        impl_->srp.srp = SRP_new(SRP6a_server_method());
         if (!impl_->srp.srp) { error = "SRP allocation failed"; return false; }
         SRP_set_username(impl_->srp.srp, "Pair-Setup");
         impl_->salt.resize(16);
@@ -143,7 +145,6 @@ bool AirPlayTransientPairing::handle(const std::vector<std::uint8_t>& request,
                            impl_->salt.data(), static_cast<int>(impl_->salt.size())) != SRP_SUCCESS) {
             error = "SRP parameters rejected"; return false;
         }
-        // Screenless AirPlay receivers use transient pairing with setup code 3939.
         if (SRP_set_auth_password(impl_->srp.srp, "3939") != SRP_SUCCESS) {
             error = "SRP password setup failed"; return false;
         }
@@ -155,7 +156,6 @@ bool AirPlayTransientPairing::handle(const std::vector<std::uint8_t>& request,
         impl_->server_key.assign(reinterpret_cast<std::uint8_t*>(pub->data),
                                  reinterpret_cast<std::uint8_t*>(pub->data) + pub->length);
         cstr_free(pub);
-
         add_tlv(response, 0x06, one_byte(2));
         add_tlv(response, 0x02, impl_->salt);
         add_tlv(response, 0x03, impl_->server_key);
@@ -178,7 +178,6 @@ bool AirPlayTransientPairing::handle(const std::vector<std::uint8_t>& request,
         shared_secret_.assign(reinterpret_cast<std::uint8_t*>(key->data),
                               reinterpret_cast<std::uint8_t*>(key->data) + key->length);
         cstr_free(key);
-
         if (SRP_verify(impl_->srp.srp, proof->data(), static_cast<int>(proof->size())) != SRP_SUCCESS) {
             response = {0x06, 0x01, 0x04, 0x07, 0x01, 0x02};
             error = "SRP client proof verification failed";
@@ -195,12 +194,13 @@ bool AirPlayTransientPairing::handle(const std::vector<std::uint8_t>& request,
         add_tlv(response, 0x06, one_byte(4));
         add_tlv(response, 0x04, proof_bytes);
         complete_ = true;
-        impl_->m4_sent = true;
         return true;
     }
 
     error = "unexpected pair-setup state";
     return false;
 }
+
+#endif
 
 } // namespace gwl::airplay2
