@@ -79,6 +79,8 @@ public:
     std::string target = "gwl-airplay.local";
     std::uint16_t port = 0;
     std::vector<MdnsTxtRecord> records;
+    // Stored in host byte order because make_response() serializes it as
+    // network-order bytes with u32().
     std::uint32_t local_address = 0;
 
     std::vector<std::uint8_t> make_response() const {
@@ -225,7 +227,8 @@ bool MdnsService::publish(const std::string& instance_name, std::uint16_t servic
     }
 
     // Discover the IPv4 address used for the LAN interface without sending
-    // application data. The address becomes the A record for the SRV target.
+    // application data. Store it in host byte order because make_response()
+    // serializes the A record explicitly in network byte order.
     {
         const Socket probe = static_cast<Socket>(::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP));
         if (probe != kInvalidSocket) {
@@ -238,17 +241,17 @@ bool MdnsService::publish(const std::string& instance_name, std::uint16_t servic
 #if defined(_WIN32)
                 int len = sizeof(local);
                 if (getsockname(probe, reinterpret_cast<sockaddr*>(&local), &len) == 0)
-                    impl_->local_address = local.sin_addr.s_addr;
+                    impl_->local_address = ntohl(local.sin_addr.s_addr);
 #else
                 socklen_t len = sizeof(local);
                 if (getsockname(probe, reinterpret_cast<sockaddr*>(&local), &len) == 0)
-                    impl_->local_address = local.sin_addr.s_addr;
+                    impl_->local_address = ntohl(local.sin_addr.s_addr);
 #endif
             }
             close_socket(probe);
         }
     }
-    if (impl_->local_address == 0) impl_->local_address = htonl(INADDR_LOOPBACK);
+    if (impl_->local_address == 0) impl_->local_address = 0x7F000001u;
 
 #if defined(_WIN32)
     const DWORD ttl = 255;
