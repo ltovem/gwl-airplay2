@@ -9,6 +9,7 @@
 #include <sstream>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -120,9 +121,20 @@ public:
     std::thread thread;
     HttpHandlerFactory factory;
 
+    // A per-connection handler may own the AirPlay RTSP session.  AirPlay 2
+    // can close the main RTSP TCP connection after SETUP while keeping the
+    // event channel alive.  Keep the handler/session alive for the lifetime
+    // of this server instead of destroying it at EOF.
+    std::vector<HttpHandler> retained_handlers;
+
     void serve_client(socket_t client, const std::string& peer) {
         std::cerr << "[HTTP] connection accepted from " << peer << std::endl;
         HttpHandler handler = factory ? factory() : HttpHandler{};
+        if (handler) {
+            retained_handlers.push_back(handler);
+            std::cerr << "[HTTP] per-connection handler retained for " << peer
+                      << " (AirPlay session lifetime)" << std::endl;
+        }
         std::string input;
         input.reserve(16384);
         std::array<char, 8192> buffer{};
@@ -210,6 +222,7 @@ bool HttpServer::start_per_connection(std::uint16_t port, HttpHandlerFactory fac
     if (WSAStartup(MAKEWORD(2, 2), &data) != 0) { impl_->running = false; return false; }
 #endif
     impl_->factory = std::move(factory);
+    impl_->retained_handlers.clear();
     impl_->listen_socket = ::socket(AF_INET, SOCK_STREAM, 0);
     if (impl_->listen_socket == invalid_socket) { impl_->running = false; return false; }
 
@@ -255,6 +268,7 @@ void HttpServer::stop() {
     impl_->listen_socket = invalid_socket;
     impl_->bound_port = 0;
     if (impl_->thread.joinable()) impl_->thread.join();
+    impl_->retained_handlers.clear();
 #ifdef _WIN32
     WSACleanup();
 #endif
