@@ -8,6 +8,7 @@
 
 #include "airplay2/alac_audio_pipeline.h"
 #include "airplay2/crypto_session.h"
+#include "airplay2/http_server.h"
 #include "airplay2/rtp.h"
 #include "airplay2/rtp_jitter_buffer.h"
 #include "airplay2/sdp.h"
@@ -35,6 +36,7 @@ struct RtpTransport {
     std::uint16_t server_control_port = 0;
     std::uint16_t server_timing_port = 0;
     std::uint16_t server_data_port = 0;
+    std::uint16_t event_port = 0;
 };
 
 class RtspSession {
@@ -81,6 +83,9 @@ private:
 
     void handle_media_packet(const RtpPacket& packet);
     void log(const std::string& message) const;
+    bool start_event_channel();
+    void stop_event_channel();
+    HttpHandler make_event_handler();
 
     bool configured_ = false;
     bool setup_info_complete_ = false;
@@ -91,6 +96,7 @@ private:
     std::unique_ptr<RtpReceiver> media_receiver_;
     std::unique_ptr<RtpReceiver> control_receiver_;
     std::unique_ptr<RtpReceiver> timing_receiver_;
+    std::unique_ptr<HttpServer> event_server_;
     RtpJitterBuffer jitter_buffer_{};
     MediaPacketHandler media_packet_handler_;
     LogHandler log_handler_;
