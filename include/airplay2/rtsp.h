@@ -1,12 +1,14 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
 
 #include "airplay2/crypto_session.h"
 #include "airplay2/rtp.h"
+#include "airplay2/rtp_jitter_buffer.h"
 #include "airplay2/sdp.h"
 
 namespace gwl::airplay2 {
@@ -36,6 +38,8 @@ struct RtpTransport {
 
 class RtspSession {
 public:
+    using MediaPacketHandler = std::function<void(const RtpPacket&)>;
+
     RtspSession();
     ~RtspSession();
 
@@ -50,7 +54,13 @@ public:
     const RtpTransport& transport() const noexcept { return transport_; }
     const AirPlaySdp& sdp() const noexcept { return sdp_; }
     const CryptoSession& crypto() const noexcept { return crypto_; }
+    const RtpStreamStats& media_stats() const noexcept { return jitter_buffer_.stats(); }
     RtpReceiver* media_receiver() noexcept { return media_receiver_.get(); }
+
+    // Receives packets after RTP parsing and jitter-buffer ordering. The
+    // callback is invoked on the RTP receiver worker thread.
+    void set_media_packet_handler(MediaPacketHandler handler);
+    void clear_media_packet_handler();
 
 private:
     RtspResponse options(const RtspRequest& request);
@@ -63,12 +73,16 @@ private:
     RtspResponse set_parameter(const RtspRequest& request);
     RtspResponse teardown(const RtspRequest& request);
 
+    void handle_media_packet(const RtpPacket& packet);
+
     bool configured_ = false;
     bool recording_ = false;
     RtpTransport transport_{};
     AirPlaySdp sdp_{};
     CryptoSession crypto_{};
     std::unique_ptr<RtpReceiver> media_receiver_;
+    RtpJitterBuffer jitter_buffer_{};
+    MediaPacketHandler media_packet_handler_;
 };
 
 } // namespace gwl::airplay2
