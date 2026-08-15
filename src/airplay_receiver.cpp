@@ -24,6 +24,14 @@ std::string make_device_id() {
     return out.str();
 }
 
+std::string make_pi(const std::string& device_id) {
+    std::string hex;
+    for (char c : device_id) if (c != ':') hex.push_back(c);
+    if (hex.size() < 32) hex.append(32 - hex.size(), '0');
+    return hex.substr(0, 8) + "-" + hex.substr(8, 4) + "-4" + hex.substr(13, 3) +
+           "-8" + hex.substr(17, 3) + "-" + hex.substr(20, 12);
+}
+
 bool is_rtsp_request(const HttpRequest& request) {
     return request.protocol == "RTSP/1.0" || request.method == "ANNOUNCE" ||
            request.method == "SETUP" || request.method == "RECORD" ||
@@ -40,6 +48,7 @@ public:
     MdnsService mdns;
     bool running = false;
     ReceiverConfig config;
+    std::string protocol_identity;
 
     void log(const std::string& message) const {
         if (config.log_callback) config.log_callback(message);
@@ -79,7 +88,7 @@ public:
         if (request.target == "/info" || request.target == "/info/") {
             std::ostringstream json;
             json << "{\"name\":\"" << config.device_name
-                 << "\",\"model\":\"GWL-AirPlay2\""
+                 << "\",\"model\":\"AppleTV3,2\""
                  << ",\"deviceID\":\"" << config.device_id << "\""
                  << ",\"protocols\":[\"airplay\"]"
                  << ",\"audio\":" << (config.enable_audio ? "true" : "false")
@@ -102,6 +111,7 @@ bool AirPlayReceiver::start(const ReceiverConfig& config) {
 
     impl_->config = config;
     if (impl_->config.device_id.empty()) impl_->config.device_id = make_device_id();
+    impl_->protocol_identity = make_pi(impl_->config.device_id);
     impl_->log("Starting receiver '" + impl_->config.device_name + "'");
     impl_->log("HTTP/RTSP port: " + std::to_string(impl_->config.port));
 
@@ -130,13 +140,14 @@ bool AirPlayReceiver::start(const ReceiverConfig& config) {
 
     const std::vector<MdnsTxtRecord> records = {
         {"deviceid", impl_->config.device_id},
-        {"model", "GWL-AirPlay2"},
-        {"srcvers", "1.0"},
+        {"model", "AppleTV3,2"},
+        {"srcvers", "220.68"},
         {"protovers", "1.1"},
         {"features", "0x5A7FFFF7,0x1E"},
-        {"flags", "0x4"},
-        {"vv", "1"},
-        {"pi", "0.8"}
+        {"flags", "0x44"},
+        {"vv", "2"},
+        {"pi", impl_->protocol_identity},
+        {"pw", "false"}
     };
 
     if (!impl_->mdns.publish(impl_->config.device_name, impl_->config.port, records)) {
@@ -148,6 +159,8 @@ bool AirPlayReceiver::start(const ReceiverConfig& config) {
     impl_->running = true;
     impl_->log("Published _airplay._tcp");
     impl_->log("Device ID: " + impl_->config.device_id);
+    impl_->log("AirPlay model: AppleTV3,2");
+    impl_->log("AirPlay features: 0x5A7FFFF7,0x1E (video + screen mirroring + audio)");
     impl_->log("Waiting for AirPlay connection...");
     return true;
 }
