@@ -1,4 +1,5 @@
 #include "airplay2/rtsp.h"
+#include "airplay2/alac_config.h"
 #include "airplay2/crypto.h"
 
 #include <algorithm>
@@ -59,6 +60,7 @@ void RtspSession::reset() {
     transport_ = {};
     sdp_ = {};
     crypto_.reset();
+    if (alac_audio_pipeline_) alac_audio_pipeline_->reset();
 }
 
 RtspResponse RtspSession::handle(const RtspRequest& request) {
@@ -86,16 +88,26 @@ RtspResponse RtspSession::announce(const RtspRequest& request) {
     if (!parse_sdp(request.body, parsed)) return base_response(request, 400, "Bad Request");
     if (!parsed.has_audio() && !parsed.has_video()) return base_response(request, 415, "Unsupported Media Type");
 
-    CryptoParameters parameters;
-    if (!extract_crypto_parameters(parsed, parameters)) {
-        sdp_ = parsed;
-        configured_ = true;
-        return base_response(request, 200, "OK");
-    }
-
-    if (!crypto_.configure(parameters)) return base_response(request, 400, "Bad Request");
     sdp_ = parsed;
     configured_ = true;
+
+    // Configure the optional plaintext ALAC path from SDP fmtp. Encrypted
+    // session handling remains a separate layer; do not feed ciphertext to
+    // the codec backend.
+    if (alac_audio_pipeline_ && parsed.has_audio() && !parsed.fmtp.empty()) {
+        AlacConfig config;
+        if (parse_alac_fmtp(parsed.fmtp, config) && config.valid()) {
+            if (!alac_audio_pipeline_->configure(config)) {
+                return base_response(request, 415, "Unsupported Media Type");
+            }
+        }
+    }
+
+    CryptoParameters parameters;
+    if (extract_crypto_parameters(parsed, parameters)) {
+        if (!crypto_.configure(parameters)) return base_response(request, 400, "Bad Request");
+    }
+
     auto response = base_response(request, 200, "OK");
     response.headers["Content-Length"] = "0";
     return response;
@@ -112,9 +124,6 @@ RtspResponse RtspSession::setup(const RtspRequest& request) {
         return base_response(request, 500, "Internal Server Error");
     }
 
-    // RTP packets are fed through the jitter buffer before being exposed to
-    // the media pipeline. The receiver thread owns this path, so callbacks
-    // never observe the same packet twice or out of sequence.
     media_receiver_->set_packet_handler([this](const RtpPacket& packet) {
         handle_media_packet(packet);
     });
@@ -187,11 +196,22 @@ void RtspSession::clear_media_packet_handler() {
     media_packet_handler_ = {};
 }
 
+void RtspSession::set_alac_audio_pipeline(std::unique_ptr<AlacAudioPipeline> pipeline) {
+    alac_audio_pipeline_ = std::move(pipeline);
+    if (alac_audio_pipeline_ && configured_ && sdp_.has_audio() && !sdp_.fmtp.empty()) {
+        AlacConfig config;
+        if (parse_alac_fmtp(sdp_.fmtp, config) && config.valid()) {
+            alac_audio_pipeline_->configure(config);
+        }
+    }
+}
+
 void RtspSession::handle_media_packet(const RtpPacket& packet) {
     if (!recording_ && !configured_) return;
     if (!jitter_buffer_.push(packet)) return;
 
     while (auto ordered = jitter_buffer_.pop()) {
+        if (alac_audio_pipeline_) alac_audio_pipeline_->push(*ordered);
         if (media_packet_handler_) media_packet_handler_(*ordered);
     }
 }
