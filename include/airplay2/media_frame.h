@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <string>
 #include <vector>
 
 namespace gwl::airplay2 {
@@ -15,7 +14,7 @@ struct MediaFrame {
     std::uint32_t timestamp = 0;
     std::uint16_t sequence = 0;
     bool marker = false;
-    std::string payload;
+    std::vector<std::uint8_t> payload;
 };
 
 struct AudioFormat {
@@ -30,22 +29,6 @@ struct VideoFormat {
     std::uint32_t width = 0;
     std::uint32_t height = 0;
     std::uint32_t clock_rate = 90000;
-};
-
-class AudioDecoder {
-public:
-    virtual ~AudioDecoder() = default;
-    virtual bool configure(const AudioFormat& format) = 0;
-    virtual bool decode(const MediaFrame& frame, std::vector<std::int16_t>& pcm) = 0;
-    virtual void reset() = 0;
-};
-
-class VideoDecoder {
-public:
-    virtual ~VideoDecoder() = default;
-    virtual bool configure(const VideoFormat& format) = 0;
-    virtual bool decode(const MediaFrame& frame, std::vector<std::uint8_t>& frame_data) = 0;
-    virtual void reset() = 0;
 };
 
 } // namespace gwl::airplay2
