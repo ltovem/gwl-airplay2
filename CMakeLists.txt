@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(gwl-airplay2 VERSION 0.1.0 LANGUAGES CXX)
+project(gwl-airplay2 VERSION 0.1.0 LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -10,8 +10,6 @@ option(GWL_AIRPLAY2_BUILD_DEMO "Build the command line demo" ON)
 option(GWL_AIRPLAY2_BUILD_TESTS "Build tests" OFF)
 option(GWL_AIRPLAY2_BUILD_SHARED "Build a shared library" OFF)
 
-# The protocol core is deliberately platform-neutral. Native applications
-# provide their own AudioSink and lifecycle integration through the public API.
 set(GWL_AIRPLAY2_SOURCES
     src/airplay_receiver.cpp
     src/http_server.cpp
@@ -31,6 +29,12 @@ set(GWL_AIRPLAY2_SOURCES
     src/alac_config.cpp
     src/alac_rtp.cpp
     src/alac_decoder.cpp
+    third_party/alac/codec/EndianPortable.c
+    third_party/alac/codec/ALACBitUtilities.c
+    third_party/alac/codec/ALACDecoder.cpp
+    third_party/alac/codec/ag_dec.c
+    third_party/alac/codec/dp_dec.c
+    third_party/alac/codec/matrix_dec.c
 )
 
 if(APPLE)
@@ -44,8 +48,8 @@ else()
 endif()
 
 target_include_directories(gwl-airplay2
-    PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party/alac/codec
 )
 
 target_compile_features(gwl-airplay2 PUBLIC cxx_std_17)
@@ -65,8 +69,6 @@ elseif(APPLE)
     target_link_libraries(gwl-airplay2 PRIVATE "-framework AudioToolbox")
 endif()
 
-# The command-line demo is a host application. It is intentionally excluded
-# from iOS and Android builds, where the host lifecycle belongs to the app.
 if(GWL_AIRPLAY2_BUILD_DEMO AND NOT IOS AND NOT ANDROID)
     add_executable(gwl-airplay2-demo examples/receiver/main.cpp)
     target_link_libraries(gwl-airplay2-demo PRIVATE gwl-airplay2)
@@ -79,8 +81,6 @@ if(GWL_AIRPLAY2_BUILD_TESTS)
     add_test(NAME gwl-airplay2-core COMMAND gwl-airplay2-tests)
 endif()
 
-# Installation is useful for desktop packages and for consumers that build
-# the core as an iOS/Android native dependency.
 include(GNUInstallDirs)
 install(TARGETS gwl-airplay2
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -89,8 +89,6 @@ install(TARGETS gwl-airplay2
 )
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
-# Platform sanity checks. These do not pull native UI/audio frameworks into
-# the protocol core; they only make the intended cross-build targets explicit.
 if(IOS)
     message(STATUS "gwl-airplay2: iOS build (${CMAKE_OSX_SYSROOT})")
 elseif(ANDROID)

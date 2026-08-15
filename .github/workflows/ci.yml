@@ -28,21 +28,17 @@ jobs:
           - name: Windows MSVC
             os: windows-latest
             compiler: msvc
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Configure
         shell: bash
         run: |
-          if [[ "${{ matrix.compiler }}" == "gcc" ]]; then
-            export CC=gcc
-            export CXX=g++
-          elif [[ "${{ matrix.compiler }}" == "clang" ]]; then
-            export CC=clang
-            export CXX=clang++
-          fi
+          if [[ "${{ matrix.compiler }}" == "gcc" ]]; then export CC=gcc; export CXX=g++; fi
+          if [[ "${{ matrix.compiler }}" == "clang" ]]; then export CC=clang; export CXX=clang++; fi
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DGWL_AIRPLAY2_BUILD_DEMO=ON -DGWL_AIRPLAY2_BUILD_TESTS=ON
 
       - name: Build
