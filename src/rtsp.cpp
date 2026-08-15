@@ -60,8 +60,7 @@ std::string info_response_plist() {
     return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
 }
 
-// Exact binary-plist shape used by AirPlay 2 for the post-SETUP event channel.
-// plistlib produces 59 bytes for {"eventPort": <uint16>}; only the integer bytes vary.
+// Exact binary-plist shape used by AirPlay 2 for {"eventPort": <uint16>}.
 std::string setup_event_response_plist(std::uint16_t event_port) {
     static const std::array<unsigned char, 59> template_bytes = {
         0x62,0x70,0x6c,0x69,0x73,0x74,0x30,0x30,
@@ -111,9 +110,8 @@ void RtspSession::reset() {
     received_packets_ = 0;
     received_bytes_ = 0;
     if (alac_audio_pipeline_) alac_audio_pipeline_->reset();
-    // Do not stop event_server_ here: reset() can be called by TEARDOWN on
-    // the event-channel worker itself. The server is owned by this session
-    // and is stopped safely by the destructor.
+    // Keep the TCP event server alive until session destruction. reset() can
+    // run on the event-channel worker itself after a TEARDOWN request.
 }
 
 RtspResponse RtspSession::handle(const RtspRequest& request) {
@@ -362,6 +360,7 @@ RtspResponse RtspSession::set_parameter(const RtspRequest& request) {
 RtspResponse RtspSession::teardown(const RtspRequest& request) {
     reset();
     auto response = base_response(request, 200, "OK");
+    response.headers["Session"] = "GWL-AIRPLAY-1";
     response.headers["Session"] = "GWL-AIRPLAY-1";
     response.headers["Content-Length"] = "0";
     return response;
