@@ -1,8 +1,10 @@
 #include "airplay2/alac_config.h"
+#include "airplay2/audio_pipeline.h"
 #include "airplay2/rtp_jitter_buffer.h"
 
 #include <cassert>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 using namespace gwl::airplay2;
@@ -41,6 +43,16 @@ static void test_jitter_wraparound() {
     assert(second && second->sequence == 0);
 }
 
+static void test_jitter_duplicates() {
+    RtpJitterBuffer buffer(8);
+    assert(buffer.push(packet(10)));
+    assert(!buffer.push(packet(10)));
+    assert(buffer.stats().discarded == 1);
+    auto value = buffer.pop();
+    assert(value && value->sequence == 10);
+    assert(!buffer.pop());
+}
+
 static void test_alac_config_and_fmtp() {
     std::vector<std::uint8_t> cookie(24, 0);
     cookie[0] = 0x00;
@@ -65,9 +77,58 @@ static void test_alac_config_and_fmtp() {
     assert(config.bit_depth == 16);
 }
 
+class TestDecoder final : public AudioDecoder {
+public:
+    bool configure(const std::vector<std::uint8_t>&) override { return true; }
+
+    bool decode(const std::uint8_t*, std::size_t, std::vector<std::int16_t>& pcm) override {
+        pcm = {1, 2, 3, 4}; // two stereo frames
+        return true;
+    }
+};
+
+class TestSink final : public AudioSink {
+public:
+    bool open(const PcmFormat& format) override {
+        opened = true;
+        channels = format.channels;
+        return true;
+    }
+
+    void close() override { opened = false; }
+
+    bool write(const std::int16_t* samples, std::size_t frames) override {
+        assert(opened);
+        assert(samples != nullptr);
+        received_frames = frames;
+        return true;
+    }
+
+    bool opened = false;
+    std::uint16_t channels = 0;
+    std::size_t received_frames = 0;
+};
+
+static void test_audio_pipeline_frame_count() {
+    auto sink = std::make_unique<TestSink>();
+    auto* sink_ptr = sink.get();
+    AudioPipeline pipeline(std::make_unique<TestDecoder>(), std::move(sink));
+
+    PcmFormat format;
+    format.sample_rate = 44100;
+    format.channels = 2;
+    assert(pipeline.configure(format, {}));
+    assert(pipeline.push(nullptr, 0));
+    assert(sink_ptr->received_frames == 2);
+    pipeline.reset();
+    assert(!sink_ptr->opened);
+}
+
 int main() {
     test_jitter_reordering();
     test_jitter_wraparound();
+    test_jitter_duplicates();
     test_alac_config_and_fmtp();
+    test_audio_pipeline_frame_count();
     return 0;
 }
