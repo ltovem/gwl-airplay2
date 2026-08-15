@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -23,6 +24,8 @@ struct RtpPacket {
 
 class RtpReceiver {
 public:
+    using PacketHandler = std::function<void(const RtpPacket&)>;
+
     RtpReceiver();
     ~RtpReceiver();
 
@@ -35,6 +38,11 @@ public:
     std::uint16_t port() const noexcept;
 
     bool receive(RtpPacket& packet, int timeout_ms = 0);
+
+    // Starts a background receive loop. The handler is invoked from the
+    // receiver thread for each valid RTP packet.
+    void set_packet_handler(PacketHandler handler);
+    void clear_packet_handler();
 
 private:
     class Impl;
