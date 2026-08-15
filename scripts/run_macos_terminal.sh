@@ -10,6 +10,10 @@ cd "${ROOT_DIR}"
 echo "==> Pull latest source"
 git pull --ff-only
 
+echo "==> Sync git submodules"
+git submodule sync --recursive
+git submodule update --init --recursive
+
 echo "==> Configure"
 CMAKE_EXTRA=()
 if command -v brew >/dev/null 2>&1; then
