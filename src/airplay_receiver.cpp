@@ -31,6 +31,55 @@ bool is_rtsp_media_request(const HttpRequest& request) {
 HttpResponse response_for(int status, const char* reason, const HttpRequest& request) {
     HttpResponse r; r.status = status; r.reason = reason; r.protocol = request.protocol.empty() ? "RTSP/1.0" : request.protocol; r.content_type.clear(); return r;
 }
+std::vector<std::uint8_t> hex_bytes(const char* text) {
+    std::vector<std::uint8_t> out;
+    for (const char* p = text; *p;) {
+        while (*p == ' ' || *p == '\n' || *p == '\t' || *p == '\r') ++p;
+        if (!p[0] || !p[1]) break;
+        unsigned int v = 0; std::stringstream ss; ss << std::hex << p[0] << p[1]; ss >> v;
+        out.push_back(static_cast<std::uint8_t>(v)); p += 2;
+    }
+    return out;
+}
+
+// FairPlay v3 fp-setup framing.  The first response is a fixed receiver-side
+// FairPlay capability/key blob used by the legacy v3 handshake.  The third
+// message is acknowledged by returning the protocol header followed by the
+// last 20 bytes of the sender's 164-byte key message.  The key message is
+// retained in the connection state for the subsequent encrypted media setup.
+const std::vector<std::uint8_t>& fairplay_v3_phase1_response() {
+    static const auto response = hex_bytes(
+        "46504c59030102000000008202039001e1727e0f57f9f5880db104a6257a23f5"
+        "cfff1abbe1e93045251afb97eb9fc0011ebe0f3a81df5b691d76acb2f7a5c708"
+        "e3d328f56bb39dbde5f29c8a17f481487e3ae863c678325422e6f78e166d18aa"
+        "7fd636258bce28726f661f738893ce44311e4be6c0535193e5ef72e868623372"
+        "9c227d820c999445d89246c8c359");
+    return response;
+}
+std::vector<std::uint8_t> handle_fairplay_setup(const std::vector<std::uint8_t>& body,
+                                                std::vector<std::uint8_t>& key_message,
+                                                std::string& error) {
+    error.clear();
+    if (body.size() < 16 || body[0] != 'F' || body[1] != 'P' || body[2] != 'L' || body[3] != 'Y') {
+        error = "invalid FPLY header"; return {};
+    }
+    if (body[4] != 3 || body[5] != 1) { error = "unsupported FairPlay version"; return {}; }
+    const auto phase = body[6];
+    if (phase == 1) {
+        // The v3 phase-1 request is 16 bytes for current iOS/macOS senders.
+        if (body.size() != 16) { error = "invalid FairPlay phase-1 length"; return {}; }
+        return fairplay_v3_phase1_response();
+    }
+    if (phase == 3) {
+        if (body.size() != 164) { error = "invalid FairPlay phase-3 length"; return {}; }
+        key_message = body;
+        static const std::uint8_t header[12] = {0x46,0x50,0x4c,0x59,0x03,0x01,0x04,0x00,0x00,0x00,0x00,0x14};
+        std::vector<std::uint8_t> response(header, header + 12);
+        response.insert(response.end(), body.begin() + 144, body.begin() + 164);
+        return response;
+    }
+    error = "unsupported FairPlay phase"; return {};
+}
 }
 
 class AirPlayReceiver::Impl {
@@ -40,7 +89,8 @@ public:
 
     HttpResponse handle_request(const HttpRequest& request, RtspSession& rtsp,
                                 AirPlayTransientPairing& transient,
-                                AirPlayHkpPairing& hkp) {
+                                AirPlayHkpPairing& hkp,
+                                std::vector<std::uint8_t>& fairplay_key_message) {
         log(request.method + " " + request.target);
         // /info and pairing are AirPlay control endpoints even though the client uses RTSP/1.0.
         if (request.target == "/info" || request.target == "/info/") {
@@ -58,9 +108,6 @@ public:
             std::vector<std::uint8_t> body(request.body.begin(), request.body.end());
             std::vector<std::uint8_t> response;
             std::string error;
-
-            // Current iOS/macOS mirroring clients use the HKP path here: the
-            // body is exactly 32 opaque bytes, not HomeKit TLV8/SRP.
             if (body.size() == 32) {
                 if (!hkp.handle_pair_setup(body, response, error)) {
                     log("[Pairing] HKP /pair-setup failed: " + error);
@@ -73,9 +120,6 @@ public:
                 log("[Pairing] HKP /pair-setup -> 200 (Ed25519 public key, 32 bytes)");
                 return r;
             }
-
-            // Keep the HomeKit transient pairing implementation for receivers
-            // that negotiate the TLV8/SRP variant.
             if (!transient.handle(body, response, error)) {
                 log("[Pairing] /pair-setup failed: " + error);
                 return response_for(400, "Bad Request", request);
@@ -103,6 +147,23 @@ public:
             if (hkp.verified()) log("[Pairing] HKP /pair-verify verified");
             return r;
         }
+        if (request.target == "/fp-setup") {
+            if (request.method != "POST") return response_for(405, "Method Not Allowed", request);
+            const std::vector<std::uint8_t> body(request.body.begin(), request.body.end());
+            std::string error;
+            const auto response = handle_fairplay_setup(body, fairplay_key_message, error);
+            if (response.empty()) {
+                log("[FairPlay] /fp-setup failed: " + error);
+                return response_for(400, "Bad Request", request);
+            }
+            HttpResponse r; r.status = 200; r.reason = "OK"; r.protocol = "RTSP/1.0";
+            r.headers["Content-Type"] = "application/octet-stream";
+            r.headers["Content-Length"] = std::to_string(response.size());
+            r.body.assign(reinterpret_cast<const char*>(response.data()), response.size());
+            if (body[6] == 1) log("[FairPlay] v3 /fp-setup phase 1 -> 200 (142 bytes)");
+            else log("[FairPlay] v3 /fp-setup phase 3 -> 200 (32 bytes; key message stored)");
+            return r;
+        }
         if (is_rtsp_media_request(request)) {
             RtspRequest rr; rr.method = request.method; rr.uri = request.target; rr.body = request.body; rr.headers = request.headers;
             const auto cseq = request.headers.find("CSeq");
@@ -128,12 +189,15 @@ bool AirPlayReceiver::start(const ReceiverConfig& config) {
         auto session = std::make_shared<RtspSession>();
         auto transient = std::make_shared<AirPlayTransientPairing>();
         auto hkp = std::make_shared<AirPlayHkpPairing>();
+        auto fairplay_key_message = std::make_shared<std::vector<std::uint8_t>>();
         session->set_log_handler([this](const std::string& message) { impl_->log(message); });
         if (impl_->config.audio_sink_factory) {
             auto sink = impl_->config.audio_sink_factory();
             if (sink) session->set_alac_audio_pipeline(std::make_unique<AlacAudioPipeline>(create_software_alac_decoder(), std::move(sink)));
         }
-        return [this, session = std::move(session), transient = std::move(transient), hkp = std::move(hkp)](const HttpRequest& request) { return impl_->handle_request(request, *session, *transient, *hkp); };
+        return [this, session = std::move(session), transient = std::move(transient), hkp = std::move(hkp), fairplay_key_message = std::move(fairplay_key_message)](const HttpRequest& request) {
+            return impl_->handle_request(request, *session, *transient, *hkp, *fairplay_key_message);
+        };
     };
     if (!impl_->server.start_per_connection(config.port, factory)) { impl_->log("ERROR: failed to bind HTTP/RTSP server"); return false; }
     const std::vector<MdnsTxtRecord> records = {{"deviceid", impl_->config.device_id}, {"model", "AppleTV3,2"}, {"srcvers", "220.68"}, {"protovers", "1.1"}, {"features", "0x5A7FFFF7,0x1E"}, {"flags", "0x44"}, {"vv", "2"}, {"pi", impl_->protocol_identity}, {"pw", "false"}};
