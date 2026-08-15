@@ -12,16 +12,14 @@ fi
 
 command -v cmake >/dev/null 2>&1 || { echo "CMake is required." >&2; exit 1; }
 
-# The ALAC decoder is a git submodule. Make the one-command build work even
-# when the repository was cloned without --recurse-submodules.
-if command -v git >/dev/null 2>&1 && [[ -f "${ROOT_DIR}/.gitmodules" ]]; then
-  echo "Initializing/updating ALAC submodule..."
+if [[ ! -f "${ROOT_DIR}/third_party/alac/codec/EndianPortable.c" ]]; then
+  echo "ALAC submodule is missing or incomplete; initializing it..."
+  git -C "${ROOT_DIR}" submodule sync --recursive
   git -C "${ROOT_DIR}" submodule update --init --recursive
 fi
 
-ALAC_DECODER="${ROOT_DIR}/third_party/alac/codec/ALACDecoder.cpp"
-if [[ ! -f "${ALAC_DECODER}" ]]; then
-  echo "ALAC decoder sources are missing." >&2
+if [[ ! -f "${ROOT_DIR}/third_party/alac/codec/EndianPortable.c" ]]; then
+  echo "ERROR: ALAC decoder sources are still missing." >&2
   echo "Run: git submodule update --init --recursive" >&2
   exit 1
 fi
@@ -31,7 +29,7 @@ cmake -S "${ROOT_DIR}" -B "${BUILD_DIR}" \
   -DGWL_AIRPLAY2_BUILD_DEMO=ON \
   -DGWL_AIRPLAY2_BUILD_TESTS=ON
 
-cmake --build "${BUILD_DIR}" --config "${BUILD_TYPE}" --target gwl-airplay2-macos-demo --parallel "$(sysctl -n hw.logicalcpu)"
+cmake --build "${BUILD_DIR}" --config "${BUILD_TYPE}" --target gwl-airplay2-macos-demo gwl-airplay2-tests --parallel "$(sysctl -n hw.logicalcpu)"
 
 ctest --test-dir "${BUILD_DIR}" -C "${BUILD_TYPE}" --output-on-failure
 
