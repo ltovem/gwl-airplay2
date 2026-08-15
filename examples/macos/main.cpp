@@ -1,9 +1,11 @@
 #include "airplay2/airplay_receiver.h"
 #include "airplay2/apple_audio_sink.h"
 
+#include <chrono>
 #include <csignal>
 #include <iostream>
 #include <memory>
+#include <thread>
 
 namespace {
 volatile std::sig_atomic_t g_running = 1;
