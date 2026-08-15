@@ -40,6 +40,7 @@ struct RtpTransport {
 class RtspSession {
 public:
     using MediaPacketHandler = std::function<void(const RtpPacket&)>;
+    using LogHandler = std::function<void(const std::string&)>;
 
     RtspSession();
     ~RtspSession();
@@ -60,6 +61,7 @@ public:
 
     void set_media_packet_handler(MediaPacketHandler handler);
     void clear_media_packet_handler();
+    void set_log_handler(LogHandler handler) { log_handler_ = std::move(handler); }
 
     // Installs an optional unprotected ALAC media pipeline. The session owns
     // the pipeline and feeds it packets after RTP ordering. Protected media
@@ -82,6 +84,7 @@ private:
     RtspResponse teardown(const RtspRequest& request);
 
     void handle_media_packet(const RtpPacket& packet);
+    void log(const std::string& message) const;
 
     bool configured_ = false;
     bool recording_ = false;
@@ -91,7 +94,10 @@ private:
     std::unique_ptr<RtpReceiver> media_receiver_;
     RtpJitterBuffer jitter_buffer_{};
     MediaPacketHandler media_packet_handler_;
+    LogHandler log_handler_;
     std::unique_ptr<AlacAudioPipeline> alac_audio_pipeline_;
+    std::uint64_t received_packets_ = 0;
+    std::uint64_t received_bytes_ = 0;
 };
 
 } // namespace gwl::airplay2
