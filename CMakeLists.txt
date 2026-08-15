@@ -9,7 +9,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(GWL_AIRPLAY2_BUILD_DEMO "Build the command line demo" ON)
 option(GWL_AIRPLAY2_BUILD_TESTS "Build tests" OFF)
 option(GWL_AIRPLAY2_BUILD_SHARED "Build a shared library" OFF)
-option(GWL_AIRPLAY2_ENABLE_OPENSSL "Enable OpenSSL crypto backend when available" ON)
+option(GWL_AIRPLAY2_ENABLE_OPENSSL "Enable OpenSSL crypto backend" ON)
+option(GWL_AIRPLAY2_USE_BUNDLED_OPENSSL "Build a private static OpenSSL from source when no system OpenSSL is available" OFF)
+set(GWL_AIRPLAY2_OPENSSL_GIT_TAG "openssl-3.5.4" CACHE STRING "Pinned OpenSSL source tag used by the bundled backend")
 
 set(GWL_AIRPLAY2_SOURCES
     src/airplay_receiver.cpp
@@ -44,8 +46,33 @@ if(APPLE)
     list(APPEND GWL_AIRPLAY2_SOURCES src/apple_audio_sink.cpp)
 endif()
 
+# Crypto is an implementation detail of the library. Prefer an already
+# installed OpenSSL, but allow applications/CI to opt into a pinned source
+# build. The bundled copy is static and PRIVATE, so it is not exposed through
+# the public gwl-airplay2 headers and does not replace another application's
+# OpenSSL runtime.
 if(GWL_AIRPLAY2_ENABLE_OPENSSL)
     find_package(OpenSSL QUIET COMPONENTS Crypto)
+
+    if(NOT OpenSSL_FOUND AND GWL_AIRPLAY2_USE_BUNDLED_OPENSSL)
+        include(FetchContent)
+        message(STATUS "gwl-airplay2: fetching OpenSSL ${GWL_AIRPLAY2_OPENSSL_GIT_TAG} from source")
+        set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+        set(OPENSSL_BUILD_APPS OFF CACHE BOOL "" FORCE)
+        set(OPENSSL_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+        set(OPENSSL_BUILD_FUZZ_TESTS OFF CACHE BOOL "" FORCE)
+        set(OPENSSL_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+        set(OPENSSL_USE_STATIC_LIBS TRUE CACHE BOOL "" FORCE)
+        FetchContent_Declare(
+            gwl_openssl
+            GIT_REPOSITORY https://github.com/openssl/openssl.git
+            GIT_TAG ${GWL_AIRPLAY2_OPENSSL_GIT_TAG}
+            GIT_SHALLOW TRUE
+        )
+        FetchContent_MakeAvailable(gwl_openssl)
+        find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+        set(GWL_AIRPLAY2_BUNDLED_OPENSSL TRUE)
+    endif()
 endif()
 
 if(GWL_AIRPLAY2_BUILD_SHARED)
@@ -73,7 +100,12 @@ target_compile_definitions(gwl-airplay2
 if(OpenSSL_FOUND)
     target_link_libraries(gwl-airplay2 PRIVATE OpenSSL::Crypto)
     target_compile_definitions(gwl-airplay2 PRIVATE GWL_AIRPLAY2_HAS_OPENSSL=1)
-    message(STATUS "gwl-airplay2: OpenSSL crypto backend enabled")
+    if(GWL_AIRPLAY2_BUNDLED_OPENSSL)
+        target_compile_definitions(gwl-airplay2 PRIVATE GWL_AIRPLAY2_BUNDLED_OPENSSL=1)
+        message(STATUS "gwl-airplay2: private bundled OpenSSL crypto backend enabled")
+    else()
+        message(STATUS "gwl-airplay2: system OpenSSL crypto backend enabled")
+    endif()
 else()
     message(STATUS "gwl-airplay2: OpenSSL not found; AirPlay pairing backend will be unavailable")
 endif()
@@ -99,8 +131,6 @@ if(GWL_AIRPLAY2_BUILD_DEMO AND APPLE AND NOT IOS AND NOT TVOS)
     add_executable(gwl-airplay2-macos-ui MACOSX_BUNDLE examples/macos/GwlAirPlayUI.mm)
     target_link_libraries(gwl-airplay2-macos-ui PRIVATE gwl-airplay2 "-framework AppKit" "-framework Foundation")
 
-    # GwlAirPlayUI.mm uses Objective-C weak references. CMake does not enable
-    # ARC automatically for OBJCXX sources, so compile this UI target with ARC.
     set_source_files_properties(examples/macos/GwlAirPlayUI.mm PROPERTIES
         COMPILE_OPTIONS "-fobjc-arc"
     )
