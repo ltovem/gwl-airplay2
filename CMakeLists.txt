@@ -84,6 +84,13 @@ if(GWL_AIRPLAY2_BUILD_DEMO AND APPLE AND NOT IOS AND NOT TVOS)
     enable_language(OBJCXX)
     add_executable(gwl-airplay2-macos-ui MACOSX_BUNDLE examples/macos/GwlAirPlayUI.mm)
     target_link_libraries(gwl-airplay2-macos-ui PRIVATE gwl-airplay2 "-framework AppKit" "-framework Foundation")
+
+    # GwlAirPlayUI.mm uses Objective-C weak references. CMake does not enable
+    # ARC automatically for OBJCXX sources, so compile this UI target with ARC.
+    set_source_files_properties(examples/macos/GwlAirPlayUI.mm PROPERTIES
+        COMPILE_OPTIONS "-fobjc-arc"
+    )
+
     set_target_properties(gwl-airplay2-macos-ui PROPERTIES
         MACOSX_BUNDLE_BUNDLE_NAME "GWL AirPlay Receiver"
         MACOSX_BUNDLE_GUI_IDENTIFIER "com.gwl.airplay2.receiver"
