@@ -75,8 +75,12 @@ bool MdnsService::publish(const std::string& instance_name, std::uint16_t port,
     }
 
 #if defined(_WIN32)
+    // Winsock SDKs do not expose IP_MULTICAST_TTL consistently across all
+    // supported MSVC/Windows SDK combinations. The Winsock option value is
+    // stable, so keep the portability detail local to this implementation.
+    constexpr int kIpMulticastTtl = 10;
     const DWORD ttl = 255;
-    if (setsockopt(impl_->socket_fd, IPPROTO_IP, IP_MULTICAST_TTL,
+    if (setsockopt(impl_->socket_fd, IPPROTO_IP, kIpMulticastTtl,
                    reinterpret_cast<const char*>(&ttl), sizeof(ttl)) != 0) {
         unpublish();
         return false;
