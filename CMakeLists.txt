@@ -9,7 +9,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(GWL_AIRPLAY2_BUILD_DEMO "Build the command line demo" ON)
 option(GWL_AIRPLAY2_BUILD_TESTS "Build tests" OFF)
 option(GWL_AIRPLAY2_BUILD_SHARED "Build a shared library" OFF)
-option(GWL_AIRPLAY2_ENABLE_OPENSSL "Enable portable AirPlay/HAP crypto backend" ON)
+option(GWL_AIRPLAY2_ENABLE_OPENSSL "Enable OpenSSL crypto backend when available" ON)
 
 set(GWL_AIRPLAY2_SOURCES
     src/airplay_receiver.cpp
@@ -45,7 +45,7 @@ if(APPLE)
 endif()
 
 if(GWL_AIRPLAY2_ENABLE_OPENSSL)
-    find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+    find_package(OpenSSL QUIET COMPONENTS Crypto)
 endif()
 
 if(GWL_AIRPLAY2_BUILD_SHARED)
@@ -70,9 +70,12 @@ target_compile_definitions(gwl-airplay2
         GWL_AIRPLAY2_VERSION_PATCH=${PROJECT_VERSION_PATCH}
 )
 
-if(GWL_AIRPLAY2_ENABLE_OPENSSL)
+if(OpenSSL_FOUND)
     target_link_libraries(gwl-airplay2 PRIVATE OpenSSL::Crypto)
     target_compile_definitions(gwl-airplay2 PRIVATE GWL_AIRPLAY2_HAS_OPENSSL=1)
+    message(STATUS "gwl-airplay2: OpenSSL crypto backend enabled")
+else()
+    message(STATUS "gwl-airplay2: OpenSSL not found; AirPlay pairing backend will be unavailable")
 endif()
 
 if(WIN32)
