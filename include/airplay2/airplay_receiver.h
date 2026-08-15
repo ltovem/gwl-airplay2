@@ -19,6 +19,10 @@ struct ReceiverConfig {
     // Optional audio sink factory. When supplied, each RTSP session gets a
     // fresh sink and can build its own ALAC pipeline from ANNOUNCE/SDP.
     std::function<std::unique_ptr<AudioSink>()> audio_sink_factory;
+
+    // Optional diagnostic callback. It is invoked from the receiver's network
+    // thread, so UI clients should dispatch onto their main/UI thread.
+    std::function<void(const std::string&)> log_callback;
 };
 
 class AirPlayReceiver {
