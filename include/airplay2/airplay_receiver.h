@@ -1,8 +1,11 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
+
+#include "airplay2/audio_pipeline.h"
 
 namespace gwl::airplay2 {
 
@@ -12,6 +15,10 @@ struct ReceiverConfig {
     std::uint16_t port = 7000;
     bool enable_audio = true;
     bool enable_video = true;
+
+    // Optional audio sink factory. When supplied, each RTSP session gets a
+    // fresh sink and can build its own ALAC pipeline from ANNOUNCE/SDP.
+    std::function<std::unique_ptr<AudioSink>()> audio_sink_factory;
 };
 
 class AirPlayReceiver {
