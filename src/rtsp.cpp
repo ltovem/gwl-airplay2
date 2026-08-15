@@ -60,20 +60,26 @@ std::string info_response_plist() {
     return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
 }
 
-// Exact binary-plist shape used by AirPlay 2 for {"eventPort": <uint16>}.
-std::string setup_event_response_plist(std::uint16_t event_port) {
-    static const std::array<unsigned char, 59> template_bytes = {
+// AirPlay 2 first SETUP response. The sender expects both the TCP event
+// channel and the receiver's NTP timing port when timingProtocol=NTP.
+std::string setup_event_response_plist(std::uint16_t event_port, std::uint16_t timing_port) {
+    static const std::array<unsigned char, 77> template_bytes = {
         0x62,0x70,0x6c,0x69,0x73,0x74,0x30,0x30,
-        0xd1,0x01,0x02,0x59,0x65,0x76,0x65,0x6e,0x74,0x50,0x6f,0x72,0x74,
-        0x11,0x00,0x00,0x08,0x0b,0x15,
+        0xd2,0x01,0x02,0x03,0x04,
+        0x59,0x65,0x76,0x65,0x6e,0x74,0x50,0x6f,0x72,0x74,
+        0x5a,0x74,0x69,0x6d,0x69,0x6e,0x67,0x50,0x6f,0x72,0x74,
+        0x11,0x00,0x00,0x5a,0x00,
+        0x08,0x0d,0x17,0x22,0x25,
         0x00,0x00,0x00,0x00,0x00,0x00,0x01,0x01,
-        0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x03,
+        0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x05,
         0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-        0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x18
+        0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x28
     };
     auto bytes = template_bytes;
-    bytes[22] = static_cast<unsigned char>((event_port >> 8) & 0xff);
-    bytes[23] = static_cast<unsigned char>(event_port & 0xff);
+    bytes[34] = static_cast<unsigned char>((event_port >> 8) & 0xff);
+    bytes[35] = static_cast<unsigned char>(event_port & 0xff);
+    bytes[37] = static_cast<unsigned char>((timing_port >> 8) & 0xff);
+    bytes[38] = static_cast<unsigned char>(timing_port & 0xff);
     return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
 }
 
@@ -262,7 +268,7 @@ RtspResponse RtspSession::setup(const RtspRequest& request) {
         log(ports.str());
 
         auto response = base_response(request, 200, "OK");
-        response.body = setup_event_response_plist(transport_.event_port);
+        response.body = setup_event_response_plist(transport_.event_port, transport_.server_timing_port);
         response.headers["Content-Length"] = std::to_string(response.body.size());
         response.headers["Content-Type"] = "application/x-apple-binary-plist";
         return response;
