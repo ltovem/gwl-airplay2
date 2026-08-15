@@ -9,220 +9,31 @@
 
 namespace gwl::airplay2 {
 namespace {
-
-RtspResponse base_response(const RtspRequest& request, int status, std::string reason) {
-    RtspResponse response;
-    response.status = status;
-    response.reason = std::move(reason);
-    if (request.cseq > 0) response.headers["CSeq"] = std::to_string(request.cseq);
-    response.headers["Server"] = "GWL-AirPlay2/0.1";
-    return response;
+RtspResponse base_response(const RtspRequest& request, int status, std::string reason) { RtspResponse response; response.status=status; response.reason=std::move(reason); if(request.cseq>0)response.headers["CSeq"]=std::to_string(request.cseq); response.headers["Server"]="GWL-AirPlay2/0.1"; return response; }
+std::string header_value(const RtspRequest& request,const char* name){for(const auto& item:request.headers){if(item.first.size()!=std::char_traits<char>::length(name))continue;bool equal=true;for(std::size_t i=0;i<item.first.size();++i)if(std::tolower(static_cast<unsigned char>(item.first[i]))!=std::tolower(static_cast<unsigned char>(name[i]))){equal=false;break;}if(equal)return item.second;}return{};}
+std::uint16_t parse_port(const std::string& text,const char* key){const auto pos=text.find(key);if(pos==std::string::npos)return 0;const auto start=pos+std::char_traits<char>::length(key);auto end=start;while(end<text.size()&&std::isdigit(static_cast<unsigned char>(text[end])))++end;if(end==start)return 0;try{auto value=std::stoul(text.substr(start,end-start));return value<=65535?static_cast<std::uint16_t>(value):0;}catch(...){return 0;}}
+bool is_binary_plist(const std::string& body){return body.size()>=8&&body.compare(0,8,"bplist00")==0;}
+std::string info_response_plist(){static const std::array<unsigned char,69> bytes={0x62,0x70,0x6c,0x69,0x73,0x74,0x30,0x30,0xd1,0x01,0x02,0x5d,0x69,0x6e,0x69,0x74,0x69,0x61,0x6c,0x56,0x6f,0x6c,0x75,0x6d,0x65,0x13,0xff,0xff,0xff,0xff,0xff,0xff,0x88,0x08,0x0b,0x19,0x00,0x00,0x00,0x00,0x00,0x00,0x01,0x01,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x03,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x22};return std::string(reinterpret_cast<const char*>(bytes.data()),bytes.size());}
+std::string setup_event_response_plist(std::uint16_t event_port,std::uint16_t timing_port){static const std::array<unsigned char,77> b={0x62,0x70,0x6c,0x69,0x73,0x74,0x30,0x30,0xd2,0x01,0x02,0x03,0x04,0x59,0x65,0x76,0x65,0x6e,0x74,0x50,0x6f,0x72,0x74,0x5a,0x74,0x69,0x6d,0x69,0x6e,0x67,0x50,0x6f,0x72,0x74,0x11,0x00,0x00,0x11,0x00,0x00,0x08,0x0d,0x17,0x22,0x25,0x00,0x00,0x00,0x00,0x00,0x00,0x01,0x01,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x05,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x28};auto bytes=b;bytes[35]=event_port>>8;bytes[36]=event_port&0xff;bytes[38]=timing_port>>8;bytes[39]=timing_port&0xff;return std::string(reinterpret_cast<const char*>(bytes.data()),bytes.size());}
+std::string setup_stream_response_plist(std::uint16_t data_port,std::uint16_t control_port,int type){if(type==96){static const std::array<unsigned char,104> b={0x62,0x70,0x6c,0x69,0x73,0x74,0x30,0x30,0xd1,0x01,0x02,0x57,0x73,0x74,0x72,0x65,0x61,0x6d,0x73,0xa1,0x03,0xd3,0x04,0x05,0x06,0x07,0x08,0x58,0x64,0x61,0x74,0x61,0x50,0x6f,0x72,0x74,0x5b,0x63,0x6f,0x6e,0x74,0x72,0x6f,0x6c,0x50,0x6f,0x72,0x74,0x54,0x74,0x79,0x70,0x65,0x11,0xd2,0xc0,0x11,0xea,0x78,0x10,0x60,0x08,0x0b,0x13,0x15,0x1c,0x25,0x31,0x36,0x39,0x3c,0x00,0x00,0x00,0x00,0x00,0x00,0x01,0x01,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x0a,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x3e};auto bytes=b;bytes[55]=data_port>>8;bytes[56]=data_port&0xff;bytes[58]=control_port>>8;bytes[59]=control_port&0xff;return std::string(reinterpret_cast<const char*>(bytes.data()),bytes.size());}static const std::array<unsigned char,85> b={0x62,0x70,0x6c,0x69,0x73,0x74,0x30,0x30,0xd1,0x01,0x02,0x57,0x73,0x74,0x72,0x65,0x61,0x6d,0x73,0xa1,0x03,0xd2,0x04,0x05,0x06,0x07,0x58,0x64,0x61,0x74,0x61,0x50,0x6f,0x72,0x74,0x54,0x74,0x79,0x70,0x65,0x11,0xd2,0xc0,0x10,0x6e,0x08,0x0b,0x13,0x15,0x1a,0x23,0x28,0x2b,0x00,0x00,0x00,0x00,0x00,0x00,0x01,0x01,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x08,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x2d};auto bytes=b;bytes[41]=data_port>>8;bytes[42]=data_port&0xff;return std::string(reinterpret_cast<const char*>(bytes.data()),bytes.size());}
 }
 
-std::string header_value(const RtspRequest& request, const char* name) {
-    for (const auto& item : request.headers) {
-        if (item.first.size() != std::char_traits<char>::length(name)) continue;
-        bool equal = true;
-        for (std::size_t i = 0; i < item.first.size(); ++i) {
-            if (std::tolower(static_cast<unsigned char>(item.first[i])) !=
-                std::tolower(static_cast<unsigned char>(name[i]))) { equal = false; break; }
-        }
-        if (equal) return item.second;
-    }
-    return {};
-}
-
-std::uint16_t parse_port(const std::string& text, const char* key) {
-    const auto pos = text.find(key);
-    if (pos == std::string::npos) return 0;
-    const auto start = pos + std::char_traits<char>::length(key);
-    auto end = start;
-    while (end < text.size() && std::isdigit(static_cast<unsigned char>(text[end]))) ++end;
-    if (end == start) return 0;
-    try {
-        const auto value = std::stoul(text.substr(start, end - start));
-        return value <= 65535 ? static_cast<std::uint16_t>(value) : 0;
-    } catch (...) { return 0; }
-}
-
-bool is_binary_plist(const std::string& body) {
-    return body.size() >= 8 && body.compare(0, 8, "bplist00") == 0;
-}
-
-std::string info_response_plist() {
-    static const std::array<unsigned char, 69> bytes = {
-        0x62,0x70,0x6c,0x69,0x73,0x74,0x30,0x30,0xd1,0x01,0x02,0x5d,0x69,0x6e,0x69,
-        0x74,0x69,0x61,0x6c,0x56,0x6f,0x6c,0x75,0x6d,0x65,0x13,0xff,0xff,0xff,0xff,0xff,
-        0xff,0x88,0x08,0x0b,0x19,0x00,0x00,0x00,0x00,0x00,0x00,0x01,0x01,0x00,0x00,0x00,
-        0x00,0x00,0x00,0x00,0x03,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-        0x00,0x00,0x00,0x22
-    };
-    return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-}
-
-std::string setup_event_response_plist(std::uint16_t event_port, std::uint16_t timing_port) {
-    static const std::array<unsigned char, 77> template_bytes = {
-        0x62,0x70,0x6c,0x69,0x73,0x74,0x30,0x30,0xd2,0x01,0x02,0x03,0x04,
-        0x59,0x65,0x76,0x65,0x6e,0x74,0x50,0x6f,0x72,0x74,
-        0x5a,0x74,0x69,0x6d,0x69,0x6e,0x67,0x50,0x6f,0x72,0x74,
-        0x11,0x00,0x00,0x11,0x00,0x00,
-        0x08,0x0d,0x17,0x22,0x25,
-        0x00,0x00,0x00,0x00,0x00,0x00,0x01,0x01,
-        0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x05,
-        0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-        0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x28
-    };
-    auto bytes = template_bytes;
-    bytes[35] = static_cast<unsigned char>((event_port >> 8) & 0xff);
-    bytes[36] = static_cast<unsigned char>(event_port & 0xff);
-    bytes[38] = static_cast<unsigned char>((timing_port >> 8) & 0xff);
-    bytes[39] = static_cast<unsigned char>(timing_port & 0xff);
-    return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-}
-
-std::string setup_stream_response_plist(std::uint16_t data_port, std::uint16_t control_port, int type) {
-    if (type == 96) {
-        static const std::array<unsigned char, 101> template_bytes = {
-            0x62,0x70,0x6c,0x69,0x73,0x74,0x30,0x30,0xd1,0x01,0x02,0x57,0x73,0x74,0x72,0x65,0x61,0x6d,0x73,
-            0xa1,0x03,0xd2,0x04,0x05,0x06,0x07,0x58,0x64,0x61,0x74,0x61,0x50,0x6f,0x72,0x74,0x5b,0x63,0x6f,0x6e,0x74,0x72,0x6f,0x6c,0x50,0x6f,0x72,0x74,0x54,0x74,0x79,0x70,0x65,
-            0x11,0x00,0x00,0x11,0x00,0x00,0x11,0x60,0x08,0x0b,0x0d,0x0f,0x17,0x1a,0x22,0x25,0x28,0x2b,0x00,0x00,0x00,0x00,0x00,0x00,0x01,0x01,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x08,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x2d
-        };
-        auto bytes = template_bytes;
-        bytes[51] = static_cast<unsigned char>((data_port >> 8) & 0xff);
-        bytes[52] = static_cast<unsigned char>(data_port & 0xff);
-        bytes[54] = static_cast<unsigned char>((control_port >> 8) & 0xff);
-        bytes[55] = static_cast<unsigned char>(control_port & 0xff);
-        return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-    }
-
-    static const std::array<unsigned char, 85> template_bytes = {
-        0x62,0x70,0x6c,0x69,0x73,0x74,0x30,0x30,0xd1,0x01,0x02,0x57,0x73,0x74,0x72,0x65,0x61,0x6d,0x73,
-        0xa1,0x03,0xd2,0x04,0x05,0x06,0x07,0x58,0x64,0x61,0x74,0x61,0x50,0x6f,0x72,0x74,0x54,0x74,0x79,0x70,0x65,
-        0x11,0x00,0x00,0x11,0x00,0x00,0x11,0x6e,0x08,0x0b,0x0d,0x17,0x1a,0x22,0x25,0x28,0x2b,0x00,0x00,0x00,0x00,0x00,0x00,0x01,0x01,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x08,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x2d
-    };
-    auto bytes = template_bytes;
-    bytes[49] = static_cast<unsigned char>((data_port >> 8) & 0xff);
-    bytes[50] = static_cast<unsigned char>(data_port & 0xff);
-    return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-}
-
-} // namespace
-
-RtspSession::RtspSession() = default;
-
-RtspSession::~RtspSession() { stop_event_channel(); }
-
-void RtspSession::log(const std::string& message) const { if (log_handler_) log_handler_(message); }
-
-void RtspSession::reset() {
-    recording_ = false;
-    configured_ = false;
-    setup_info_complete_ = false;
-    media_packet_handler_ = {};
-    if (media_receiver_) media_receiver_->clear_packet_handler();
-    if (control_receiver_) control_receiver_->clear_packet_handler();
-    if (timing_receiver_) timing_receiver_->clear_packet_handler();
-    if (media_receiver_) media_receiver_->close();
-    if (control_receiver_) control_receiver_->close();
-    if (timing_receiver_) timing_receiver_->close();
-    media_receiver_.reset(); control_receiver_.reset(); timing_receiver_.reset();
-    jitter_buffer_.reset(); transport_ = {}; sdp_ = {}; crypto_.reset();
-    received_packets_ = 0; received_bytes_ = 0;
-    if (alac_audio_pipeline_) alac_audio_pipeline_->reset();
-}
-
-RtspResponse RtspSession::handle(const RtspRequest& request) {
-    if (request.method == "OPTIONS") return options(request);
-    if (request.method == "ANNOUNCE") return announce(request);
-    if (request.method == "SETUP") return setup(request);
-    if (request.method == "RECORD") return record(request);
-    if (request.method == "PAUSE") return pause(request);
-    if (request.method == "FLUSH") return flush(request);
-    if (request.method == "GET_PARAMETER") return get_parameter(request);
-    if (request.method == "SET_PARAMETER") return set_parameter(request);
-    if (request.method == "TEARDOWN") return teardown(request);
-    return base_response(request, 405, "Method Not Allowed");
-}
-
-HttpHandler RtspSession::make_event_handler() {
-    return [this](const HttpRequest& request) {
-        RtspRequest rr; rr.method=request.method; rr.uri=request.target; rr.body=request.body; rr.headers=request.headers;
-        const auto cseq=request.headers.find("CSeq"); if(cseq!=request.headers.end()) { try{rr.cseq=std::stoi(cseq->second);}catch(...){rr.cseq=0;} }
-        const auto rs=handle(rr); HttpResponse response; response.status=rs.status; response.reason=rs.reason;
-        response.protocol=request.protocol.empty()?"RTSP/1.0":request.protocol; response.content_type.clear(); response.headers=rs.headers; response.body=rs.body; return response;
-    };
-}
-
-bool RtspSession::start_event_channel() {
-    if (event_server_ && event_server_->running()) { transport_.event_port=event_server_->port(); return transport_.event_port!=0; }
-    event_server_=std::make_unique<HttpServer>();
-    if(!event_server_->start_per_connection(0,[this]{return make_event_handler();})) { event_server_.reset(); transport_.event_port=0; log("AirPlay SETUP: failed to allocate TCP event channel"); return false; }
-    transport_.event_port=event_server_->port();
-    if(!transport_.event_port){event_server_->stop();event_server_.reset();log("AirPlay SETUP: TCP event channel has no bound port");return false;}
-    log("AirPlay event channel listening: tcp="+std::to_string(transport_.event_port)); return true;
-}
-
-void RtspSession::stop_event_channel() { if(event_server_){event_server_->stop();event_server_.reset();} transport_.event_port=0; }
-
-RtspResponse RtspSession::options(const RtspRequest& request) {
-    auto response=base_response(request,200,"OK"); response.headers["Public"]="OPTIONS, ANNOUNCE, SETUP, RECORD, PAUSE, FLUSH, TEARDOWN, GET_PARAMETER, SET_PARAMETER"; response.headers["Allow"]=response.headers["Public"]; return response;
-}
-
-RtspResponse RtspSession::announce(const RtspRequest& request) {
-    AirPlaySdp parsed; if(!parse_sdp(request.body,parsed)) return base_response(request,400,"Bad Request"); if(!parsed.has_audio()&&!parsed.has_video()) return base_response(request,415,"Unsupported Media Type");
-    sdp_=parsed; configured_=true; log("AirPlay ANNOUNCE accepted");
-    for(const auto& media:parsed.media){std::ostringstream d;d<<"SDP media: "<<media.type<<" payload="<<media.payload_type<<" codec="<<(media.codec.empty()?"unknown":media.codec)<<" clock="<<media.clock_rate;log(d.str());}
-    log(parsed.has_video()?"Screen Mirroring: video SDP detected":"Screen Mirroring: no video SDP in this session");
-    if(alac_audio_pipeline_&&parsed.has_audio()&&!parsed.fmtp.empty()){AlacConfig config;if(parse_alac_fmtp(parsed.fmtp,config)&&config.valid()){if(!alac_audio_pipeline_->configure(config))return base_response(request,415,"Unsupported Media Type");}}
-    CryptoParameters parameters; if(extract_crypto_parameters(parsed,parameters)){if(!crypto_.configure(parameters))return base_response(request,400,"Bad Request");log("RTSP crypto parameters detected");}
-    auto response=base_response(request,200,"OK");response.headers["Content-Length"]="0";return response;
-}
-
-RtspResponse RtspSession::setup(const RtspRequest& request) {
-    if (!setup_info_complete_ && is_binary_plist(request.body)) {
-        setup_info_complete_=true; configured_=true;
-        if(!media_receiver_)media_receiver_=std::make_unique<RtpReceiver>(); if(!control_receiver_)control_receiver_=std::make_unique<RtpReceiver>(); if(!timing_receiver_)timing_receiver_=std::make_unique<RtpReceiver>();
-        if(!media_receiver_->bind(0)||!control_receiver_->bind(0)||!timing_receiver_->bind(0)){log("AirPlay SETUP: failed to allocate RTP/control/timing UDP ports");return base_response(request,500,"Internal Server Error");}
-        if(!start_event_channel())return base_response(request,500,"Internal Server Error");
-        transport_.server_data_port=media_receiver_->port();transport_.server_control_port=control_receiver_->port();transport_.server_timing_port=timing_receiver_->port();
-        log("AirPlay SETUP info accepted (binary plist; event channel enabled)"); std::ostringstream ports; ports<<"AirPlay transport allocated: data="<<transport_.server_data_port<<" control="<<transport_.server_control_port<<" timing="<<transport_.server_timing_port<<" event="<<transport_.event_port; log(ports.str());
-        auto response=base_response(request,200,"OK");response.body=setup_event_response_plist(transport_.event_port,transport_.server_timing_port);response.headers["Content-Length"]=std::to_string(response.body.size());response.headers["Content-Type"]="application/x-apple-binary-plist";return response;
-    }
-    if(!configured_)return base_response(request,455,"Method Not Valid in This State");
-
-    // AirPlay 2 sends a second binary-plist SETUP containing a streams array.
-    // The receiver must return the dataPort for each requested stream. The old
-    // implementation treated this as legacy RTP SETUP and returned an empty body,
-    // which makes Apple close the RTSP connection immediately after /info.
-    if(is_binary_plist(request.body)) {
-        const bool audio = request.body.find("type") != std::string::npos && request.body.find("\x11\x60",0) != std::string::npos;
-        const int type = audio ? 96 : 110;
-        log(std::string("AirPlay stream SETUP: type=") + std::to_string(type));
-        auto response=base_response(request,200,"OK");
-        response.body=setup_stream_response_plist(transport_.server_data_port,transport_.server_control_port,type);
-        response.headers["Content-Type"]="application/x-apple-binary-plist";
-        response.headers["Content-Length"]=std::to_string(response.body.size());
-        return response;
-    }
-
-    const auto transport=header_value(request,"Transport"); transport_.client_control_port=parse_port(transport,"control_port="); transport_.client_timing_port=parse_port(transport,"timing_port=");
-    if(!media_receiver_)media_receiver_=std::make_unique<RtpReceiver>(); if(!media_receiver_->running()&&!media_receiver_->bind(0))return base_response(request,500,"Internal Server Error");
-    media_receiver_->set_packet_handler([this](const RtpPacket& packet){handle_media_packet(packet);}); transport_.server_data_port=media_receiver_->port();
-    if(transport_.server_control_port==0){if(!control_receiver_)control_receiver_=std::make_unique<RtpReceiver>();if(!control_receiver_->running()&&!control_receiver_->bind(0))return base_response(request,500,"Internal Server Error");transport_.server_control_port=control_receiver_->port();}
-    if(transport_.server_timing_port==0){if(!timing_receiver_)timing_receiver_=std::make_unique<RtpReceiver>();if(!timing_receiver_->running()&&!timing_receiver_->bind(0))return base_response(request,500,"Internal Server Error");transport_.server_timing_port=timing_receiver_->port();}
-    std::ostringstream description;description<<"RTP SETUP: server_data_port="<<transport_.server_data_port<<" server_control_port="<<transport_.server_control_port<<" server_timing_port="<<transport_.server_timing_port;if(sdp_.has_video())description<<" (video session present)";else if(setup_info_complete_)description<<" (binary-plist AirPlay stream setup)";log(description.str());
-    auto response=base_response(request,200,"OK");response.headers["Session"]="GWL-AIRPLAY-1";response.headers["Transport"]="RTP/AVP/UDP;unicast;mode=record;server_port="+std::to_string(transport_.server_data_port)+";control_port="+std::to_string(transport_.server_control_port)+";timing_port="+std::to_string(transport_.server_timing_port);response.headers["Content-Length"]="0";return response;
-}
-
-RtspResponse RtspSession::record(const RtspRequest& request) { if(!configured_||!media_receiver_||!media_receiver_->running())return base_response(request,455,"Method Not Valid in This State"); recording_=true;log("RTSP RECORD: media receiver active");if(sdp_.has_video())log("Screen Mirroring: waiting for video RTP packets");auto response=base_response(request,200,"OK");response.headers["Session"]="GWL-AIRPLAY-1";response.headers["Content-Length"]="0";return response; }
-RtspResponse RtspSession::pause(const RtspRequest& request) { recording_=false;if(alac_audio_pipeline_)alac_audio_pipeline_->reset();auto response=base_response(request,200,"OK");response.headers["Session"]="GWL-AIRPLAY-1";response.headers["Content-Length"]="0";return response; }
-RtspResponse RtspSession::flush(const RtspRequest& request) { jitter_buffer_.reset();auto response=base_response(request,200,"OK");response.headers["Session"]="GWL-AIRPLAY-1";response.headers["Content-Length"]="0";return response; }
-RtspResponse RtspSession::get_parameter(const RtspRequest& request) { auto response=base_response(request,200,"OK");response.headers["Session"]="GWL-AIRPLAY-1";response.headers["Content-Length"]="0";return response; }
-RtspResponse RtspSession::set_parameter(const RtspRequest& request) { auto response=base_response(request,200,"OK");response.headers["Session"]="GWL-AIRPLAY-1";response.headers["Content-Length"]="0";return response; }
-RtspResponse RtspSession::teardown(const RtspRequest& request) { reset();auto response=base_response(request,200,"OK");response.headers["Session"]="GWL-AIRPLAY-1";response.headers["Content-Length"]="0";return response; }
-
-void RtspSession::set_media_packet_handler(MediaPacketHandler handler){media_packet_handler_=std::move(handler);} void RtspSession::clear_media_packet_handler(){media_packet_handler_={};}
-void RtspSession::set_alac_audio_pipeline(std::unique_ptr<AlacAudioPipeline> pipeline){alac_audio_pipeline_=std::move(pipeline);if(alac_audio_pipeline_&&configured_&&sdp_.has_audio()&&!sdp_.fmtp.empty()){AlacConfig config;if(parse_alac_fmtp(sdp_.fmtp,config)&&config.valid())alac_audio_pipeline_->configure(config);}}
-void RtspSession::handle_media_packet(const RtpPacket& packet){if(!recording_)return;if(!jitter_buffer_.push(packet))return;++received_packets_;received_bytes_+=packet.payload.size();if(received_packets_==1||(received_packets_%500)==0){std::ostringstream message;message<<"RTP media: packets="<<received_packets_<<" payload_bytes="<<received_bytes_<<" payload_type="<<static_cast<int>(packet.payload_type)<<" seq="<<packet.sequence;log(message.str());}while(auto ordered=jitter_buffer_.pop()){if(alac_audio_pipeline_)alac_audio_pipeline_->push(*ordered);if(media_packet_handler_)media_packet_handler_(*ordered);}}
-
+RtspSession::RtspSession()=default; RtspSession::~RtspSession(){stop_event_channel();} void RtspSession::log(const std::string& m)const{if(log_handler_)log_handler_(m);}
+void RtspSession::reset(){recording_=false;configured_=false;setup_info_complete_=false;media_packet_handler_={};if(media_receiver_)media_receiver_->clear_packet_handler();if(control_receiver_)control_receiver_->clear_packet_handler();if(timing_receiver_)timing_receiver_->clear_packet_handler();if(media_receiver_)media_receiver_->close();if(control_receiver_)control_receiver_->close();if(timing_receiver_)timing_receiver_->close();media_receiver_.reset();control_receiver_.reset();timing_receiver_.reset();jitter_buffer_.reset();transport_={};sdp_={};crypto_.reset();received_packets_=0;received_bytes_=0;if(alac_audio_pipeline_)alac_audio_pipeline_->reset();}
+RtspResponse RtspSession::handle(const RtspRequest& r){if(r.method=="OPTIONS")return options(r);if(r.method=="ANNOUNCE")return announce(r);if(r.method=="SETUP")return setup(r);if(r.method=="RECORD")return record(r);if(r.method=="PAUSE")return pause(r);if(r.method=="FLUSH")return flush(r);if(r.method=="GET_PARAMETER")return get_parameter(r);if(r.method=="SET_PARAMETER")return set_parameter(r);if(r.method=="TEARDOWN")return teardown(r);return base_response(r,405,"Method Not Allowed");}
+HttpHandler RtspSession::make_event_handler(){return [this](const HttpRequest& request){RtspRequest rr;rr.method=request.method;rr.uri=request.target;rr.body=request.body;rr.headers=request.headers;const auto cseq=request.headers.find("CSeq");if(cseq!=request.headers.end()){try{rr.cseq=std::stoi(cseq->second);}catch(...){rr.cseq=0;}}const auto rs=handle(rr);HttpResponse response;response.status=rs.status;response.reason=rs.reason;response.protocol=request.protocol.empty()?"RTSP/1.0":request.protocol;response.content_type.clear();response.headers=rs.headers;response.body=rs.body;return response;};}
+bool RtspSession::start_event_channel(){if(event_server_&&event_server_->running()){transport_.event_port=event_server_->port();return transport_.event_port!=0;}event_server_=std::make_unique<HttpServer>();if(!event_server_->start_per_connection(0,[this]{return make_event_handler();})){event_server_.reset();transport_.event_port=0;log("AirPlay SETUP: failed to allocate TCP event channel");return false;}transport_.event_port=event_server_->port();if(!transport_.event_port){event_server_->stop();event_server_.reset();log("AirPlay SETUP: TCP event channel has no bound port");return false;}log("AirPlay event channel listening: tcp="+std::to_string(transport_.event_port));return true;}
+void RtspSession::stop_event_channel(){if(event_server_){event_server_->stop();event_server_.reset();}transport_.event_port=0;}
+RtspResponse RtspSession::options(const RtspRequest& r){auto x=base_response(r,200,"OK");x.headers["Public"]="OPTIONS, ANNOUNCE, SETUP, RECORD, PAUSE, FLUSH, TEARDOWN, GET_PARAMETER, SET_PARAMETER";x.headers["Allow"]=x.headers["Public"];return x;}
+RtspResponse RtspSession::announce(const RtspRequest& r){AirPlaySdp p;if(!parse_sdp(r.body,p))return base_response(r,400,"Bad Request");if(!p.has_audio()&&!p.has_video())return base_response(r,415,"Unsupported Media Type");sdp_=p;configured_=true;log("AirPlay ANNOUNCE accepted");for(const auto& m:p.media){std::ostringstream d;d<<"SDP media: "<<m.type<<" payload="<<m.payload_type<<" codec="<<(m.codec.empty()?"unknown":m.codec)<<" clock="<<m.clock_rate;log(d.str());}log(p.has_video()?"Screen Mirroring: video SDP detected":"Screen Mirroring: no video SDP in this session");if(alac_audio_pipeline_&&p.has_audio()&&!p.fmtp.empty()){AlacConfig c;if(parse_alac_fmtp(p.fmtp,c)&&c.valid())if(!alac_audio_pipeline_->configure(c))return base_response(r,415,"Unsupported Media Type");}CryptoParameters cp;if(extract_crypto_parameters(p,cp)){if(!crypto_.configure(cp))return base_response(r,400,"Bad Request");log("RTSP crypto parameters detected");}auto x=base_response(r,200,"OK");x.headers["Content-Length"]="0";return x;}
+RtspResponse RtspSession::setup(const RtspRequest& r){if(!setup_info_complete_&&is_binary_plist(r.body)){setup_info_complete_=true;configured_=true;if(!media_receiver_)media_receiver_=std::make_unique<RtpReceiver>();if(!control_receiver_)control_receiver_=std::make_unique<RtpReceiver>();if(!timing_receiver_)timing_receiver_=std::make_unique<RtpReceiver>();if(!media_receiver_->bind(0)||!control_receiver_->bind(0)||!timing_receiver_->bind(0)){log("AirPlay SETUP: failed to allocate RTP/control/timing UDP ports");return base_response(r,500,"Internal Server Error");}if(!start_event_channel())return base_response(r,500,"Internal Server Error");transport_.server_data_port=media_receiver_->port();transport_.server_control_port=control_receiver_->port();transport_.server_timing_port=timing_receiver_->port();log("AirPlay SETUP info accepted (binary plist; event channel enabled)");std::ostringstream p;p<<"AirPlay transport allocated: data="<<transport_.server_data_port<<" control="<<transport_.server_control_port<<" timing="<<transport_.server_timing_port<<" event="<<transport_.event_port;log(p.str());auto x=base_response(r,200,"OK");x.body=setup_event_response_plist(transport_.event_port,transport_.server_timing_port);x.headers["Content-Length"]=std::to_string(x.body.size());x.headers["Content-Type"]="application/x-apple-binary-plist";return x;}if(!configured_)return base_response(r,455,"Method Not Valid in This State");if(is_binary_plist(r.body)){const bool audio=r.body.find("type")!=std::string::npos&&r.body.find(std::string("\x11\x60",2))!=std::string::npos;const int type=audio?96:110;log("AirPlay stream SETUP: type="+std::to_string(type));auto x=base_response(r,200,"OK");x.body=setup_stream_response_plist(transport_.server_data_port,transport_.server_control_port,type);x.headers["Content-Type"]="application/x-apple-binary-plist";x.headers["Content-Length"]=std::to_string(x.body.size());return x;}const auto t=header_value(r,"Transport");transport_.client_control_port=parse_port(t,"control_port=");transport_.client_timing_port=parse_port(t,"timing_port=");if(!media_receiver_)media_receiver_=std::make_unique<RtpReceiver>();if(!media_receiver_->running()&&!media_receiver_->bind(0))return base_response(r,500,"Internal Server Error");media_receiver_->set_packet_handler([this](const RtpPacket& p){handle_media_packet(p);});transport_.server_data_port=media_receiver_->port();if(transport_.server_control_port==0){if(!control_receiver_)control_receiver_=std::make_unique<RtpReceiver>();if(!control_receiver_->running()&&!control_receiver_->bind(0))return base_response(r,500,"Internal Server Error");transport_.server_control_port=control_receiver_->port();}if(transport_.server_timing_port==0){if(!timing_receiver_)timing_receiver_=std::make_unique<RtpReceiver>();if(!timing_receiver_->running()&&!timing_receiver_->bind(0))return base_response(r,500,"Internal Server Error");transport_.server_timing_port=timing_receiver_->port();}std::ostringstream d;d<<"RTP SETUP: server_data_port="<<transport_.server_data_port<<" server_control_port="<<transport_.server_control_port<<" server_timing_port="<<transport_.server_timing_port;if(sdp_.has_video())d<<" (video session present)";else if(setup_info_complete_)d<<" (binary-plist AirPlay stream setup)";log(d.str());auto x=base_response(r,200,"OK");x.headers["Session"]="GWL-AIRPLAY-1";x.headers["Transport"]="RTP/AVP/UDP;unicast;mode=record;server_port="+std::to_string(transport_.server_data_port)+";control_port="+std::to_string(transport_.server_control_port)+";timing_port="+std::to_string(transport_.server_timing_port);x.headers["Content-Length"]="0";return x;}
+RtspResponse RtspSession::record(const RtspRequest& r){if(!configured_||!media_receiver_||!media_receiver_->running())return base_response(r,455,"Method Not Valid in This State");recording_=true;log("RTSP RECORD: media receiver active");if(sdp_.has_video())log("Screen Mirroring: waiting for video RTP packets");auto x=base_response(r,200,"OK");x.headers["Session"]="GWL-AIRPLAY-1";x.headers["Content-Length"]="0";return x;}
+RtspResponse RtspSession::pause(const RtspRequest& r){recording_=false;if(alac_audio_pipeline_)alac_audio_pipeline_->reset();auto x=base_response(r,200,"OK");x.headers["Session"]="GWL-AIRPLAY-1";x.headers["Content-Length"]="0";return x;}
+RtspResponse RtspSession::flush(const RtspRequest& r){jitter_buffer_.reset();auto x=base_response(r,200,"OK");x.headers["Session"]="GWL-AIRPLAY-1";x.headers["Content-Length"]="0";return x;}
+RtspResponse RtspSession::get_parameter(const RtspRequest& r){auto x=base_response(r,200,"OK");x.headers["Session"]="GWL-AIRPLAY-1";x.headers["Content-Length"]="0";return x;}
+RtspResponse RtspSession::set_parameter(const RtspRequest& r){auto x=base_response(r,200,"OK");x.headers["Session"]="GWL-AIRPLAY-1";x.headers["Content-Length"]="0";return x;}
+RtspResponse RtspSession::teardown(const RtspRequest& r){reset();auto x=base_response(r,200,"OK");x.headers["Session"]="GWL-AIRPLAY-1";x.headers["Content-Length"]="0";return x;}
+void RtspSession::set_media_packet_handler(MediaPacketHandler h){media_packet_handler_=std::move(h);}void RtspSession::clear_media_packet_handler(){media_packet_handler_={};}
+void RtspSession::set_alac_audio_pipeline(std::unique_ptr<AlacAudioPipeline> p){alac_audio_pipeline_=std::move(p);if(alac_audio_pipeline_&&configured_&&sdp_.has_audio()&&!sdp_.fmtp.empty()){AlacConfig c;if(parse_alac_fmtp(sdp_.fmtp,c)&&c.valid())alac_audio_pipeline_->configure(c);}}
+void RtspSession::handle_media_packet(const RtpPacket& p){if(!recording_)return;if(!jitter_buffer_.push(p))return;++received_packets_;received_bytes_+=p.payload.size();if(received_packets_==1||(received_packets_%500)==0){std::ostringstream m;m<<"RTP media: packets="<<received_packets_<<" payload_bytes="<<received_bytes_<<" payload_type="<<static_cast<int>(p.payload_type)<<" seq="<<p.sequence;log(m.str());}while(auto ordered=jitter_buffer_.pop()){if(alac_audio_pipeline_)alac_audio_pipeline_->push(*ordered);if(media_packet_handler_)media_packet_handler_(*ordered);}}
 } // namespace gwl::airplay2
