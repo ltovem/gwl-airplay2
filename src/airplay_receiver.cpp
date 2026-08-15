@@ -4,13 +4,10 @@
 #include "airplay2/mdns.h"
 #include "airplay2/rtsp.h"
 
-#include <chrono>
-#include <csignal>
 #include <iomanip>
 #include <memory>
 #include <random>
 #include <sstream>
-#include <thread>
 
 namespace gwl::airplay2 {
 namespace {
@@ -110,6 +107,9 @@ bool AirPlayReceiver::start(const ReceiverConfig& config) {
 
     const auto factory = [this]() -> HttpHandler {
         auto session = std::make_shared<RtspSession>();
+        session->set_log_handler([this](const std::string& message) {
+            impl_->log(message);
+        });
         if (impl_->config.audio_sink_factory) {
             auto sink = impl_->config.audio_sink_factory();
             if (sink) {
