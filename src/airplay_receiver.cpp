@@ -1,10 +1,12 @@
 #include "airplay2/airplay_receiver.h"
 #include "airplay2/airplay_pairing.h"
+#include "airplay2/airplay_hkp_pairing.h"
 #include "airplay2/apple_audio_sink.h"
 #include "airplay2/http_server.h"
 #include "airplay2/mdns.h"
 #include "airplay2/rtsp.h"
 
+#include <algorithm>
 #include <iomanip>
 #include <memory>
 #include <random>
