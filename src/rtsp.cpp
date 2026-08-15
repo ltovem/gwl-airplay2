@@ -60,32 +60,31 @@ std::string info_response_plist() {
     return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
 }
 
-std::string setup_event_response_plist(std::uint16_t event_port, std::uint16_t timing_port) {
-    static const std::array<unsigned char, 77> template_bytes = {
+// Exact binary-plist shape used by AirPlay 2 for the post-SETUP event channel.
+// plistlib produces 59 bytes for {"eventPort": <uint16>}; only the integer bytes vary.
+std::string setup_event_response_plist(std::uint16_t event_port) {
+    static const std::array<unsigned char, 59> template_bytes = {
         0x62,0x70,0x6c,0x69,0x73,0x74,0x30,0x30,
-        0xd2,0x01,0x02,0x03,0x04,
-        0x59,0x65,0x76,0x65,0x6e,0x74,0x50,0x6f,0x72,0x74,
-        0x5a,0x74,0x69,0x6d,0x69,0x6e,0x67,0x50,0x6f,0x72,0x74,
-        0x11,0x00,0x00,
-        0x11,0x00,0x00,
-        0x08,0x0d,0x17,0x22,0x25,
+        0xd1,0x01,0x02,0x59,0x65,0x76,0x65,0x6e,0x74,0x50,0x6f,0x72,0x74,
+        0x11,0x00,0x00,0x08,0x0b,0x15,
         0x00,0x00,0x00,0x00,0x00,0x00,0x01,0x01,
-        0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x05,
+        0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x03,
         0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-        0x00,0x00,0x00,0x00,0x00,0x28
+        0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x18
     };
     auto bytes = template_bytes;
-    bytes[35] = static_cast<unsigned char>((event_port >> 8) & 0xff);
-    bytes[36] = static_cast<unsigned char>(event_port & 0xff);
-    bytes[38] = static_cast<unsigned char>((timing_port >> 8) & 0xff);
-    bytes[39] = static_cast<unsigned char>(timing_port & 0xff);
+    bytes[22] = static_cast<unsigned char>((event_port >> 8) & 0xff);
+    bytes[23] = static_cast<unsigned char>(event_port & 0xff);
     return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
 }
 
 } // namespace
 
 RtspSession::RtspSession() = default;
-RtspSession::~RtspSession() = default;
+
+RtspSession::~RtspSession() {
+    stop_event_channel();
+}
 
 void RtspSession::log(const std::string& message) const {
     if (log_handler_) log_handler_(message);
@@ -112,6 +111,9 @@ void RtspSession::reset() {
     received_packets_ = 0;
     received_bytes_ = 0;
     if (alac_audio_pipeline_) alac_audio_pipeline_->reset();
+    // Do not stop event_server_ here: reset() can be called by TEARDOWN on
+    // the event-channel worker itself. The server is owned by this session
+    // and is stopped safely by the destructor.
 }
 
 RtspResponse RtspSession::handle(const RtspRequest& request) {
@@ -125,6 +127,64 @@ RtspResponse RtspSession::handle(const RtspRequest& request) {
     if (request.method == "SET_PARAMETER") return set_parameter(request);
     if (request.method == "TEARDOWN") return teardown(request);
     return base_response(request, 405, "Method Not Allowed");
+}
+
+HttpHandler RtspSession::make_event_handler() {
+    return [this](const HttpRequest& request) {
+        RtspRequest rr;
+        rr.method = request.method;
+        rr.uri = request.target;
+        rr.body = request.body;
+        rr.headers = request.headers;
+        const auto cseq = request.headers.find("CSeq");
+        if (cseq != request.headers.end()) {
+            try { rr.cseq = std::stoi(cseq->second); } catch (...) { rr.cseq = 0; }
+        }
+
+        const auto rs = handle(rr);
+        HttpResponse response;
+        response.status = rs.status;
+        response.reason = rs.reason;
+        response.protocol = request.protocol.empty() ? "RTSP/1.0" : request.protocol;
+        response.content_type.clear();
+        response.headers = rs.headers;
+        response.body = rs.body;
+        return response;
+    };
+}
+
+bool RtspSession::start_event_channel() {
+    if (event_server_ && event_server_->running()) {
+        transport_.event_port = event_server_->port();
+        return transport_.event_port != 0;
+    }
+
+    event_server_ = std::make_unique<HttpServer>();
+    if (!event_server_->start_per_connection(0, [this] { return make_event_handler(); })) {
+        event_server_.reset();
+        transport_.event_port = 0;
+        log("AirPlay SETUP: failed to allocate TCP event channel");
+        return false;
+    }
+
+    transport_.event_port = event_server_->port();
+    if (transport_.event_port == 0) {
+        event_server_->stop();
+        event_server_.reset();
+        log("AirPlay SETUP: TCP event channel has no bound port");
+        return false;
+    }
+
+    log("AirPlay event channel listening: tcp=" + std::to_string(transport_.event_port));
+    return true;
+}
+
+void RtspSession::stop_event_channel() {
+    if (event_server_) {
+        event_server_->stop();
+        event_server_.reset();
+    }
+    transport_.event_port = 0;
 }
 
 RtspResponse RtspSession::options(const RtspRequest& request) {
@@ -189,20 +249,22 @@ RtspResponse RtspSession::setup(const RtspRequest& request) {
             return base_response(request, 500, "Internal Server Error");
         }
 
+        if (!start_event_channel()) return base_response(request, 500, "Internal Server Error");
+
         transport_.server_data_port = media_receiver_->port();
         transport_.server_control_port = control_receiver_->port();
         transport_.server_timing_port = timing_receiver_->port();
 
-        log("AirPlay SETUP info accepted (binary plist; no legacy ANNOUNCE)");
+        log("AirPlay SETUP info accepted (binary plist; event channel enabled)");
         std::ostringstream ports;
         ports << "AirPlay transport allocated: data=" << transport_.server_data_port
               << " control=" << transport_.server_control_port
-              << " timing=" << transport_.server_timing_port;
+              << " timing=" << transport_.server_timing_port
+              << " event=" << transport_.event_port;
         log(ports.str());
 
         auto response = base_response(request, 200, "OK");
-        response.body = setup_event_response_plist(transport_.server_control_port,
-                                                   transport_.server_timing_port);
+        response.body = setup_event_response_plist(transport_.event_port);
         response.headers["Content-Length"] = std::to_string(response.body.size());
         response.headers["Content-Type"] = "application/x-apple-binary-plist";
         return response;
