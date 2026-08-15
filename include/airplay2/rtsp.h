@@ -63,10 +63,6 @@ public:
     void clear_media_packet_handler();
     void set_log_handler(LogHandler handler) { log_handler_ = std::move(handler); }
 
-    // Installs an optional unprotected ALAC media pipeline. The session owns
-    // the pipeline and feeds it packets after RTP ordering. Protected media
-    // remains outside this path until a supported key/decryption layer is
-    // explicitly provided by the application.
     void set_alac_audio_pipeline(std::unique_ptr<AlacAudioPipeline> pipeline);
     bool audio_pipeline_configured() const noexcept {
         return alac_audio_pipeline_ && alac_audio_pipeline_->configured();
