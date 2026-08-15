@@ -1,4 +1,6 @@
 #include "airplay2/airplay_receiver.h"
+#include "airplay2/alac_decoder.h"
+#include "airplay2/alac_audio_pipeline.h"
 #include "airplay2/http_server.h"
 #include "airplay2/mdns.h"
 #include "airplay2/rtsp.h"
@@ -90,6 +92,14 @@ bool AirPlayReceiver::start(const ReceiverConfig& config) {
 
     const auto factory = [this]() -> HttpHandler {
         auto session = std::make_shared<RtspSession>();
+        if (impl_->config.audio_sink_factory) {
+            auto sink = impl_->config.audio_sink_factory();
+            if (sink) {
+                session->set_alac_audio_pipeline(
+                    std::make_unique<AlacAudioPipeline>(
+                        create_software_alac_decoder(), std::move(sink)));
+            }
+        }
         return [this, session = std::move(session)](const HttpRequest& request) {
             return impl_->handle_request(request, *session);
         };
