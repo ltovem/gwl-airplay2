@@ -36,6 +36,7 @@ public:
     bool start_per_connection(std::uint16_t port, HttpHandlerFactory factory);
     void stop();
     bool running() const noexcept;
+    std::uint16_t port() const noexcept;
 
 private:
     class Impl;
