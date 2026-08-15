@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cctype>
 #include <cstring>
+#include <iostream>
 #include <sstream>
 #include <thread>
 #include <utility>
@@ -30,6 +31,18 @@ void close_socket(socket_t s) { if (s != INVALID_SOCKET) closesocket(s); }
 #else
 void close_socket(socket_t s) { if (s >= 0) ::close(s); }
 #endif
+
+std::string peer_address(const sockaddr_in& addr) {
+    char text[INET_ADDRSTRLEN] = {};
+#ifdef _WIN32
+    inet_ntop(AF_INET, const_cast<IN_ADDR*>(&addr.sin_addr), text, sizeof(text));
+#else
+    inet_ntop(AF_INET, &addr.sin_addr, text, sizeof(text));
+#endif
+    std::ostringstream out;
+    out << (text[0] ? text : "?") << ':' << ntohs(addr.sin_port);
+    return out.str();
+}
 
 std::string trim(std::string value) {
     while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front()))) value.erase(value.begin());
@@ -93,7 +106,8 @@ public:
     std::thread thread;
     HttpHandlerFactory factory;
 
-    void serve_client(socket_t client) {
+    void serve_client(socket_t client, const std::string& peer) {
+        std::cerr << "[HTTP] connection accepted from " << peer << std::endl;
         HttpHandler handler = factory ? factory() : HttpHandler{};
         std::string input;
         input.reserve(16384);
@@ -105,12 +119,19 @@ public:
 #else
             const int n = static_cast<int>(::recv(client, buffer.data(), buffer.size(), 0));
 #endif
-            if (n <= 0) break;
+            if (n <= 0) {
+                std::cerr << "[HTTP] connection closed from " << peer << " (recv=" << n << ")" << std::endl;
+                break;
+            }
             input.append(buffer.data(), static_cast<std::size_t>(n));
+            std::cerr << "[HTTP] received " << n << " bytes from " << peer << std::endl;
 
             while (true) {
                 HttpRequest request;
                 if (!parse_request(input, request)) break;
+                std::cerr << "[HTTP] request from " << peer << ": "
+                          << request.method << " " << request.target << " " << request.protocol
+                          << std::endl;
                 HttpResponse response = handler ? handler(request) : HttpResponse{};
                 if (response.reason.empty()) response.reason = response.status == 200 ? "OK" : "Error";
                 if (response.protocol.empty()) response.protocol = request.protocol.empty() ? "HTTP/1.1" : request.protocol;
@@ -126,6 +147,8 @@ public:
 #else
                 if (::send(client, out.data(), out.size(), 0) <= 0) return;
 #endif
+                std::cerr << "[HTTP] response to " << peer << ": "
+                          << response.status << " " << response.reason << std::endl;
 
                 const auto connection = header_value(request.headers, "Connection");
                 if (connection == "close") return;
@@ -146,9 +169,10 @@ public:
             socket_t client = ::accept(listen_socket, reinterpret_cast<sockaddr*>(&addr), &len);
             if (client == invalid_socket) {
                 if (!running.load()) break;
+                std::cerr << "[HTTP] accept failed" << std::endl;
                 continue;
             }
-            serve_client(client);
+            serve_client(client, peer_address(addr));
             close_socket(client);
         }
     }
@@ -189,6 +213,7 @@ bool HttpServer::start_per_connection(std::uint16_t port, HttpHandlerFactory fac
 #endif
         return false;
     }
+    std::cerr << "[HTTP] listening on 0.0.0.0:" << port << std::endl;
     impl_->thread = std::thread([this] { impl_->serve(); });
     return true;
 }
