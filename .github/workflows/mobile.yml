@@ -71,3 +71,21 @@ jobs:
 
       - name: Build
         run: cmake --build build-android-${{ matrix.abi }} --config Release --parallel
+
+  tvos:
+    name: tvOS Core
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure
+        run: >-
+          cmake -S . -B build-tvos -G Xcode
+          -DCMAKE_SYSTEM_NAME=tvOS
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0
+          -DGWL_AIRPLAY2_BUILD_DEMO=OFF
+          -DGWL_AIRPLAY2_BUILD_TESTS=OFF
+
+      - name: Build
+        run: cmake --build build-tvos --config Release --parallel
