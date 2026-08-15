@@ -77,6 +77,11 @@ if(GWL_AIRPLAY2_BUILD_DEMO AND NOT IOS AND NOT ANDROID)
     target_link_libraries(gwl-airplay2-demo PRIVATE gwl-airplay2)
 endif()
 
+if(GWL_AIRPLAY2_BUILD_DEMO AND APPLE AND NOT IOS AND NOT TVOS)
+    add_executable(gwl-airplay2-macos-demo examples/macos/main.cpp)
+    target_link_libraries(gwl-airplay2-macos-demo PRIVATE gwl-airplay2)
+endif()
+
 if(GWL_AIRPLAY2_BUILD_TESTS)
     enable_testing()
     add_executable(gwl-airplay2-tests tests/core_tests.cpp)
