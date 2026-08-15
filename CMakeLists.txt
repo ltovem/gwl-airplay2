@@ -25,6 +25,7 @@ set(GWL_AIRPLAY2_SOURCES
     src/crypto.cpp
     src/crypto_session.cpp
     src/airplay_pairing.cpp
+    src/airplay_hkp_pairing.cpp
     src/audio_pipeline.cpp
     src/alac_audio_pipeline.cpp
     src/audio_clock.cpp
