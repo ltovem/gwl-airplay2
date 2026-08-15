@@ -18,6 +18,14 @@ if command -v brew >/dev/null 2>&1; then
         echo "==> Using Homebrew OpenSSL: ${OPENSSL_PREFIX}"
     fi
 fi
+
+# Set GWL_AIRPLAY2_USE_BUNDLED_OPENSSL=ON to force the pinned OpenSSL source
+# build. It remains OFF by default so normal macOS development is fast and
+# uses the locally installed OpenSSL when available.
+BUNDLED_OPENSSL="${GWL_AIRPLAY2_USE_BUNDLED_OPENSSL:-OFF}"
+CMAKE_EXTRA+=("-DGWL_AIRPLAY2_USE_BUNDLED_OPENSSL=${BUNDLED_OPENSSL}")
+echo "==> Bundled OpenSSL source build: ${BUNDLED_OPENSSL}"
+
 cmake -S . -B "${BUILD_DIR}" -DCMAKE_BUILD_TYPE=Debug -DGWL_AIRPLAY2_BUILD_DEMO=ON "${CMAKE_EXTRA[@]}"
 
 echo "==> Build"
