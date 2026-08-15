@@ -89,6 +89,8 @@ private:
     AirPlaySdp sdp_{};
     CryptoSession crypto_{};
     std::unique_ptr<RtpReceiver> media_receiver_;
+    std::unique_ptr<RtpReceiver> control_receiver_;
+    std::unique_ptr<RtpReceiver> timing_receiver_;
     RtpJitterBuffer jitter_buffer_{};
     MediaPacketHandler media_packet_handler_;
     LogHandler log_handler_;
