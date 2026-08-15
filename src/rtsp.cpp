@@ -62,8 +62,7 @@ std::string info_response_plist() {
 
 std::string setup_event_response_plist(std::uint16_t event_port, std::uint16_t timing_port) {
     // Binary plist for {eventPort: <port>, timingPort: <port>}.
-    // Ports are encoded as 32-bit integers so the object table/footer stays
-    // fixed-size for dynamic port allocation.
+    // Ports are encoded as 16-bit values inside 32-bit integer objects.
     std::array<unsigned char, 77> bytes = {
         0x62,0x70,0x6c,0x69,0x73,0x74,0x30,0x30,
         0xd2,0x01,0x02,0x03,0x04,
@@ -79,8 +78,8 @@ std::string setup_event_response_plist(std::uint16_t event_port, std::uint16_t t
     };
     bytes[35] = static_cast<unsigned char>((event_port >> 8) & 0xff);
     bytes[36] = static_cast<unsigned char>(event_port & 0xff);
-    bytes[39] = static_cast<unsigned char>((timing_port >> 8) & 0xff);
-    bytes[40] = static_cast<unsigned char>(timing_port & 0xff);
+    bytes[38] = static_cast<unsigned char>((timing_port >> 8) & 0xff);
+    bytes[39] = static_cast<unsigned char>(timing_port & 0xff);
     return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
 }
 
