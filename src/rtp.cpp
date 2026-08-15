@@ -1,8 +1,10 @@
 #include "airplay2/rtp.h"
 
 #include <array>
+#include <atomic>
 #include <chrono>
-#include <cstring>
+#include <mutex>
+#include <thread>
 
 #if defined(_WIN32)
 #include <winsock2.h>
@@ -10,7 +12,6 @@
 using socket_length_t = int;
 #else
 #include <arpa/inet.h>
-#include <fcntl.h>
 #include <netinet/in.h>
 #include <sys/select.h>
 #include <sys/socket.h>
@@ -24,7 +25,37 @@ class RtpReceiver::Impl {
 public:
     int fd = -1;
     std::uint16_t port = 0;
+    std::mutex handler_mutex;
+    PacketHandler handler;
+    std::atomic<bool> worker_running{false};
+    std::thread worker;
 };
+
+namespace {
+
+void stop_worker(RtpReceiver::Impl& impl) {
+    impl.worker_running.store(false, std::memory_order_release);
+    if (impl.worker.joinable()) impl.worker.join();
+}
+
+void start_worker(RtpReceiver::Impl& impl, RtpReceiver* receiver) {
+    if (impl.worker_running.exchange(true, std::memory_order_acq_rel)) return;
+    impl.worker = std::thread([&impl, receiver] {
+        while (impl.worker_running.load(std::memory_order_acquire)) {
+            RtpPacket packet;
+            if (!receiver->receive(packet, 100)) continue;
+
+            PacketHandler callback;
+            {
+                std::lock_guard<std::mutex> lock(impl.handler_mutex);
+                callback = impl.handler;
+            }
+            if (callback) callback(packet);
+        }
+    });
+}
+
+} // namespace
 
 RtpReceiver::RtpReceiver() : impl_(std::make_unique<Impl>()) {}
 
@@ -38,7 +69,12 @@ bool RtpReceiver::bind(std::uint16_t requested_port) {
 #endif
 
     impl_->fd = static_cast<int>(::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP));
-    if (impl_->fd < 0) return false;
+    if (impl_->fd < 0) {
+#if defined(_WIN32)
+        WSACleanup();
+#endif
+        return false;
+    }
 
     int reuse = 1;
     setsockopt(impl_->fd, SOL_SOCKET, SO_REUSEADDR,
@@ -59,11 +95,18 @@ bool RtpReceiver::bind(std::uint16_t requested_port) {
     if (::getsockname(impl_->fd, reinterpret_cast<sockaddr*>(&actual), &length) == 0) {
         impl_->port = ntohs(actual.sin_port);
     }
+
+    {
+        std::lock_guard<std::mutex> lock(impl_->handler_mutex);
+        if (impl_->handler) start_worker(*impl_, this);
+    }
     return true;
 }
 
 void RtpReceiver::close() {
-    if (!impl_ || impl_->fd < 0) return;
+    if (!impl_) return;
+    stop_worker(*impl_);
+    if (impl_->fd < 0) return;
 #if defined(_WIN32)
     closesocket(impl_->fd);
     WSACleanup();
@@ -77,6 +120,20 @@ void RtpReceiver::close() {
 bool RtpReceiver::running() const noexcept { return impl_ && impl_->fd >= 0; }
 
 std::uint16_t RtpReceiver::port() const noexcept { return impl_ ? impl_->port : 0; }
+
+void RtpReceiver::set_packet_handler(PacketHandler handler) {
+    {
+        std::lock_guard<std::mutex> lock(impl_->handler_mutex);
+        impl_->handler = std::move(handler);
+    }
+    if (running()) start_worker(*impl_, this);
+}
+
+void RtpReceiver::clear_packet_handler() {
+    stop_worker(*impl_);
+    std::lock_guard<std::mutex> lock(impl_->handler_mutex);
+    impl_->handler = {};
+}
 
 bool RtpReceiver::receive(RtpPacket& packet, int timeout_ms) {
     if (!running()) return false;
