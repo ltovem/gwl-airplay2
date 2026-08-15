@@ -33,6 +33,10 @@ set(GWL_AIRPLAY2_SOURCES
     src/alac_decoder.cpp
 )
 
+if(APPLE)
+    list(APPEND GWL_AIRPLAY2_SOURCES src/apple_audio_sink.cpp)
+endif()
+
 if(GWL_AIRPLAY2_BUILD_SHARED)
     add_library(gwl-airplay2 SHARED ${GWL_AIRPLAY2_SOURCES})
 else()
@@ -57,6 +61,8 @@ if(WIN32)
     target_link_libraries(gwl-airplay2 PRIVATE ws2_32)
 elseif(UNIX AND NOT APPLE)
     target_link_libraries(gwl-airplay2 PRIVATE pthread)
+elseif(APPLE)
+    target_link_libraries(gwl-airplay2 PRIVATE "-framework AudioToolbox")
 endif()
 
 # The command-line demo is a host application. It is intentionally excluded
