@@ -6,6 +6,7 @@
 
 #if defined(_WIN32)
 #include <winsock2.h>
+#include <ws2tcpip.h>
 #else
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -65,12 +66,29 @@ bool MdnsService::publish(const std::string& instance_name, std::uint16_t port,
 #endif
     impl_->socket_fd = static_cast<int>(::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP));
     if (impl_->socket_fd < 0) return false;
-    int reuse = 1;
-    setsockopt(impl_->socket_fd, SOL_SOCKET, SO_REUSEADDR,
-               reinterpret_cast<const char*>(&reuse), sizeof(reuse));
-    unsigned char ttl = 255;
-    setsockopt(impl_->socket_fd, IPPROTO_IP, IP_MULTICAST_TTL,
-               reinterpret_cast<const char*>(&ttl), sizeof(ttl));
+
+    const int reuse = 1;
+    if (setsockopt(impl_->socket_fd, SOL_SOCKET, SO_REUSEADDR,
+                   reinterpret_cast<const char*>(&reuse), sizeof(reuse)) != 0) {
+        unpublish();
+        return false;
+    }
+
+#if defined(_WIN32)
+    const DWORD ttl = 255;
+    if (setsockopt(impl_->socket_fd, IPPROTO_IP, IP_MULTICAST_TTL,
+                   reinterpret_cast<const char*>(&ttl), sizeof(ttl)) != 0) {
+        unpublish();
+        return false;
+    }
+#else
+    const unsigned char ttl = 255;
+    if (setsockopt(impl_->socket_fd, IPPROTO_IP, IP_MULTICAST_TTL,
+                   &ttl, sizeof(ttl)) != 0) {
+        unpublish();
+        return false;
+    }
+#endif
 
     sockaddr_in dst{};
     dst.sin_family = AF_INET;
@@ -123,7 +141,8 @@ bool MdnsService::publish(const std::string& instance_name, std::uint16_t port,
 void MdnsService::unpublish() {
     if (!impl_ || impl_->socket_fd < 0) return;
 #if defined(_WIN32)
-    closesocket(impl_->socket_fd); WSACleanup();
+    closesocket(static_cast<SOCKET>(impl_->socket_fd));
+    WSACleanup();
 #else
     close(impl_->socket_fd);
 #endif
