@@ -1,14 +1,13 @@
 #include "airplay2/airplay_receiver.h"
-#include "airplay2/alac_decoder.h"
-#include "airplay2/alac_audio_pipeline.h"
-#include "airplay2/http_server.h"
-#include "airplay2/mdns.h"
-#include "airplay2/rtsp.h"
+#include "airplay2/apple_audio_sink.h"
 
+#include <chrono>
+#include <csignal>
 #include <iomanip>
 #include <memory>
 #include <random>
 #include <sstream>
+#include <thread>
 
 namespace gwl::airplay2 {
 namespace {
@@ -29,7 +28,8 @@ bool is_rtsp_request(const HttpRequest& request) {
     return request.protocol == "RTSP/1.0" || request.method == "ANNOUNCE" ||
            request.method == "SETUP" || request.method == "RECORD" ||
            request.method == "FLUSH" || request.method == "TEARDOWN" ||
-           request.method == "GET_PARAMETER" || request.method == "SET_PARAMETER";
+           request.method == "GET_PARAMETER" || request.method == "SET_PARAMETER" ||
+           request.method == "PAUSE";
 }
 
 } // namespace
@@ -41,7 +41,15 @@ public:
     bool running = false;
     ReceiverConfig config;
 
+    void log(const std::string& message) const {
+        if (config.log_callback) config.log_callback(message);
+    }
+
     HttpResponse handle_request(const HttpRequest& request, RtspSession& rtsp) {
+        std::ostringstream line;
+        line << request.method << " " << request.target;
+        log(line.str());
+
         if (is_rtsp_request(request)) {
             RtspRequest rtsp_request;
             rtsp_request.method = request.method;
@@ -54,6 +62,10 @@ public:
             }
 
             const RtspResponse rtsp_response = rtsp.handle(rtsp_request);
+            std::ostringstream result;
+            result << "RTSP " << rtsp_response.status << " " << rtsp_response.reason;
+            log(result.str());
+
             HttpResponse response;
             response.status = rtsp_response.status;
             response.reason = rtsp_response.reason;
@@ -73,6 +85,7 @@ public:
                  << ",\"audio\":" << (config.enable_audio ? "true" : "false")
                  << ",\"video\":" << (config.enable_video ? "true" : "false")
                  << "}";
+            log("GET /info -> 200");
             return {200, "OK", "HTTP/1.1", "application/json", {}, json.str()};
         }
 
@@ -89,6 +102,8 @@ bool AirPlayReceiver::start(const ReceiverConfig& config) {
 
     impl_->config = config;
     if (impl_->config.device_id.empty()) impl_->config.device_id = make_device_id();
+    impl_->log("Starting receiver '" + impl_->config.device_name + "'");
+    impl_->log("HTTP/RTSP port: " + std::to_string(impl_->config.port));
 
     const auto factory = [this]() -> HttpHandler {
         auto session = std::make_shared<RtspSession>();
@@ -105,7 +120,10 @@ bool AirPlayReceiver::start(const ReceiverConfig& config) {
         };
     };
 
-    if (!impl_->server.start_per_connection(config.port, factory)) return false;
+    if (!impl_->server.start_per_connection(config.port, factory)) {
+        impl_->log("ERROR: failed to bind HTTP/RTSP server");
+        return false;
+    }
 
     const std::vector<MdnsTxtRecord> records = {
         {"deviceid", impl_->config.device_id},
@@ -119,16 +137,21 @@ bool AirPlayReceiver::start(const ReceiverConfig& config) {
     };
 
     if (!impl_->mdns.publish(impl_->config.device_name, impl_->config.port, records)) {
+        impl_->log("ERROR: failed to publish _airplay._tcp via mDNS");
         impl_->server.stop();
         return false;
     }
 
     impl_->running = true;
+    impl_->log("Published _airplay._tcp");
+    impl_->log("Device ID: " + impl_->config.device_id);
+    impl_->log("Waiting for AirPlay connection...");
     return true;
 }
 
 void AirPlayReceiver::stop() {
     if (!impl_) return;
+    if (impl_->running) impl_->log("Stopping receiver");
     impl_->mdns.unpublish();
     impl_->server.stop();
     impl_->running = false;
