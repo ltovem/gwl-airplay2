@@ -361,7 +361,6 @@ RtspResponse RtspSession::teardown(const RtspRequest& request) {
     reset();
     auto response = base_response(request, 200, "OK");
     response.headers["Session"] = "GWL-AIRPLAY-1";
-    response.headers["Session"] = "GWL-AIRPLAY-1";
     response.headers["Content-Length"] = "0";
     return response;
 }
