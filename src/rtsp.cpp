@@ -44,6 +44,10 @@ std::uint16_t parse_port(const std::string& text, const char* key) {
     } catch (...) { return 0; }
 }
 
+bool is_binary_plist(const std::string& body) {
+    return body.size() >= 8 && body.compare(0, 8, "bplist00") == 0;
+}
+
 } // namespace
 
 RtspSession::RtspSession() = default;
@@ -56,6 +60,7 @@ void RtspSession::log(const std::string& message) const {
 void RtspSession::reset() {
     recording_ = false;
     configured_ = false;
+    setup_info_complete_ = false;
     media_packet_handler_ = {};
     if (media_receiver_) media_receiver_->clear_packet_handler();
     if (media_receiver_) media_receiver_->close();
@@ -131,7 +136,22 @@ RtspResponse RtspSession::announce(const RtspRequest& request) {
 }
 
 RtspResponse RtspSession::setup(const RtspRequest& request) {
+    // Modern AirPlay mirroring sends a binary-plist SETUP immediately after
+    // FairPlay.  Unlike the legacy AirPlay path, there is no ANNOUNCE/SDP
+    // before this request.  The first SETUP is the generic connection-info
+    // phase; accepting it moves the RTSP state machine to the stream SETUP.
+    if (!setup_info_complete_ && is_binary_plist(request.body)) {
+        setup_info_complete_ = true;
+        configured_ = true;
+        log("AirPlay SETUP info accepted (binary plist; no legacy ANNOUNCE)");
+        auto response = base_response(request, 200, "OK");
+        response.headers["Content-Length"] = "0";
+        response.headers["Content-Type"] = "application/x-apple-binary-plist";
+        return response;
+    }
+
     if (!configured_) return base_response(request, 455, "Method Not Valid in This State");
+
     const auto transport = header_value(request, "Transport");
     transport_.client_control_port = parse_port(transport, "control_port=");
     transport_.client_timing_port = parse_port(transport, "timing_port=");
@@ -152,6 +172,7 @@ RtspResponse RtspSession::setup(const RtspRequest& request) {
     std::ostringstream description;
     description << "RTP SETUP: server_data_port=" << transport_.server_data_port;
     if (sdp_.has_video()) description << " (video session present)";
+    else if (setup_info_complete_) description << " (binary-plist AirPlay stream setup)";
     log(description.str());
 
     auto response = base_response(request, 200, "OK");
