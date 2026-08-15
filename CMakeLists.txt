@@ -49,7 +49,9 @@ endif()
 
 target_include_directories(gwl-airplay2
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
-    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party/alac/codec
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/alac_compat
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/alac/codec
 )
 
 target_compile_features(gwl-airplay2 PUBLIC cxx_std_17)
