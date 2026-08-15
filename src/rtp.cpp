@@ -111,7 +111,7 @@ bool RtpReceiver::receive(RtpPacket& packet, int timeout_ms) {
     const bool extension = (buffer[0] & 0x10u) != 0;
     const std::uint8_t csrc_count = buffer[0] & 0x0fu;
     const bool marker = (buffer[1] & 0x80u) != 0;
-    const std::size_t payload_type = buffer[1] & 0x7fu;
+    const std::uint8_t payload_type = buffer[1] & 0x7fu;
     std::size_t offset = 12 + static_cast<std::size_t>(csrc_count) * 4;
     if (offset > static_cast<std::size_t>(received)) return false;
 
@@ -123,10 +123,10 @@ bool RtpReceiver::receive(RtpPacket& packet, int timeout_ms) {
         if (offset > static_cast<std::size_t>(received)) return false;
     }
 
-    const std::size_t padding = buffer[0] & 0x20u ? buffer[received - 1] : 0;
+    const std::size_t padding = (buffer[0] & 0x20u) ? buffer[received - 1] : 0;
     if (padding > static_cast<std::size_t>(received) - offset) return false;
 
-    packet.payload_type = static_cast<std::uint8_t>(payload_type);
+    packet.payload_type = payload_type;
     packet.marker = marker;
     packet.sequence = static_cast<std::uint16_t>((buffer[2] << 8) | buffer[3]);
     packet.timestamp = (static_cast<std::uint32_t>(buffer[4]) << 24) |
@@ -137,8 +137,8 @@ bool RtpReceiver::receive(RtpPacket& packet, int timeout_ms) {
                   (static_cast<std::uint32_t>(buffer[9]) << 16) |
                   (static_cast<std::uint32_t>(buffer[10]) << 8) |
                   static_cast<std::uint32_t>(buffer[11]);
-    packet.payload.assign(reinterpret_cast<const char*>(buffer.data() + offset),
-                          reinterpret_cast<const char*>(buffer.data() + received - padding));
+    packet.payload.assign(buffer.begin() + static_cast<std::ptrdiff_t>(offset),
+                          buffer.begin() + static_cast<std::ptrdiff_t>(received - padding));
     return true;
 }
 
