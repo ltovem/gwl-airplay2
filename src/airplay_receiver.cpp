@@ -1,5 +1,6 @@
 #include "airplay2/airplay_receiver.h"
 #include "airplay2/airplay_pairing.h"
+#include "airplay2/airplay_hkp_pairing.h"
 #include "airplay2/apple_audio_sink.h"
 #include "airplay2/http_server.h"
 #include "airplay2/mdns.h"
@@ -37,7 +38,9 @@ public:
     HttpServer server; MdnsService mdns; bool running = false; ReceiverConfig config; std::string protocol_identity;
     void log(const std::string& message) const { if (config.log_callback) config.log_callback(message); }
 
-    HttpResponse handle_request(const HttpRequest& request, RtspSession& rtsp, AirPlayTransientPairing& pairing) {
+    HttpResponse handle_request(const HttpRequest& request, RtspSession& rtsp,
+                                AirPlayTransientPairing& transient,
+                                AirPlayHkpPairing& hkp) {
         log(request.method + " " + request.target);
         // /info and pairing are AirPlay control endpoints even though the client uses RTSP/1.0.
         if (request.target == "/info" || request.target == "/info/") {
@@ -55,25 +58,50 @@ public:
             std::vector<std::uint8_t> body(request.body.begin(), request.body.end());
             std::vector<std::uint8_t> response;
             std::string error;
-            if (!pairing.handle(body, response, error)) {
+
+            // Current iOS/macOS mirroring clients use the HKP path here: the
+            // body is exactly 32 opaque bytes, not HomeKit TLV8/SRP.
+            if (body.size() == 32) {
+                if (!hkp.handle_pair_setup(body, response, error)) {
+                    log("[Pairing] HKP /pair-setup failed: " + error);
+                    return response_for(400, "Bad Request", request);
+                }
+                HttpResponse r; r.status = 200; r.reason = "OK"; r.protocol = "RTSP/1.0";
+                r.headers["Content-Type"] = "application/octet-stream";
+                r.headers["Content-Length"] = std::to_string(response.size());
+                r.body.assign(reinterpret_cast<const char*>(response.data()), response.size());
+                log("[Pairing] HKP /pair-setup -> 200 (Ed25519 public key, 32 bytes)");
+                return r;
+            }
+
+            // Keep the HomeKit transient pairing implementation for receivers
+            // that negotiate the TLV8/SRP variant.
+            if (!transient.handle(body, response, error)) {
                 log("[Pairing] /pair-setup failed: " + error);
                 return response_for(400, "Bad Request", request);
             }
-            if (!error.empty()) log("[Pairing] " + error);
-            HttpResponse r;
-            r.status = 200; r.reason = "OK"; r.protocol = "RTSP/1.0";
+            HttpResponse r; r.status = 200; r.reason = "OK"; r.protocol = "RTSP/1.0";
             r.headers["Content-Type"] = "application/octet-stream";
             r.headers["Content-Length"] = std::to_string(response.size());
             r.body.assign(reinterpret_cast<const char*>(response.data()), response.size());
-            if (pairing.complete()) log("[Pairing] transient Pair-Setup M4 complete; SRP shared secret established");
+            if (transient.complete()) log("[Pairing] transient Pair-Setup M4 complete; SRP shared secret established");
             return r;
         }
         if (request.target == "/pair-verify") {
-            // Pair-verify is intentionally handled by the same per-connection pairing object
-            // in the next stage. Transient pairing completes at M4, so an immediate follow-up
-            // is normally encrypted rather than another plaintext pair-verify request.
-            log("[Pairing] /pair-verify received; transient mode does not require a separate verify exchange");
-            return response_for(400, "Bad Request", request);
+            if (request.method != "POST") return response_for(405, "Method Not Allowed", request);
+            std::vector<std::uint8_t> body(request.body.begin(), request.body.end());
+            std::vector<std::uint8_t> response;
+            std::string error;
+            if (!hkp.handle_pair_verify(body, response, error)) {
+                log("[Pairing] HKP /pair-verify failed: " + error);
+                return response_for(400, "Bad Request", request);
+            }
+            HttpResponse r; r.status = 200; r.reason = "OK"; r.protocol = "RTSP/1.0";
+            r.headers["Content-Type"] = "application/octet-stream";
+            r.headers["Content-Length"] = std::to_string(response.size());
+            r.body.assign(reinterpret_cast<const char*>(response.data()), response.size());
+            if (hkp.verified()) log("[Pairing] HKP /pair-verify verified");
+            return r;
         }
         if (is_rtsp_media_request(request)) {
             RtspRequest rr; rr.method = request.method; rr.uri = request.target; rr.body = request.body; rr.headers = request.headers;
@@ -98,13 +126,14 @@ bool AirPlayReceiver::start(const ReceiverConfig& config) {
     impl_->log("HTTP/RTSP port: " + std::to_string(impl_->config.port));
     const auto factory = [this]() -> HttpHandler {
         auto session = std::make_shared<RtspSession>();
-        auto pairing = std::make_shared<AirPlayTransientPairing>();
+        auto transient = std::make_shared<AirPlayTransientPairing>();
+        auto hkp = std::make_shared<AirPlayHkpPairing>();
         session->set_log_handler([this](const std::string& message) { impl_->log(message); });
         if (impl_->config.audio_sink_factory) {
             auto sink = impl_->config.audio_sink_factory();
             if (sink) session->set_alac_audio_pipeline(std::make_unique<AlacAudioPipeline>(create_software_alac_decoder(), std::move(sink)));
         }
-        return [this, session = std::move(session), pairing = std::move(pairing)](const HttpRequest& request) { return impl_->handle_request(request, *session, *pairing); };
+        return [this, session = std::move(session), transient = std::move(transient), hkp = std::move(hkp)](const HttpRequest& request) { return impl_->handle_request(request, *session, *transient, *hkp); };
     };
     if (!impl_->server.start_per_connection(config.port, factory)) { impl_->log("ERROR: failed to bind HTTP/RTSP server"); return false; }
     const std::vector<MdnsTxtRecord> records = {{"deviceid", impl_->config.device_id}, {"model", "AppleTV3,2"}, {"srcvers", "220.68"}, {"protovers", "1.1"}, {"features", "0x5A7FFFF7,0x1E"}, {"flags", "0x44"}, {"vv", "2"}, {"pi", impl_->protocol_identity}, {"pw", "false"}};
