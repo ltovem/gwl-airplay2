@@ -22,6 +22,7 @@ set(GWL_AIRPLAY2_SOURCES
     src/crypto.cpp
     src/crypto_session.cpp
     src/audio_pipeline.cpp
+    src/alac_audio_pipeline.cpp
     src/audio_clock.cpp
     src/callback_audio_sink.cpp
     src/platform.cpp
