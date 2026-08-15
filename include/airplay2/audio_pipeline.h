@@ -20,6 +20,9 @@ public:
     virtual ~AudioSink() = default;
     virtual bool open(const PcmFormat& format) = 0;
     virtual void close() = 0;
+
+    // samples points to interleaved PCM. frames is the number of PCM frames,
+    // not the number of scalar samples in the interleaved buffer.
     virtual bool write(const std::int16_t* samples, std::size_t frames) = 0;
 };
 
@@ -47,6 +50,7 @@ public:
 private:
     std::unique_ptr<AudioDecoder> decoder_;
     std::unique_ptr<AudioSink> sink_;
+    PcmFormat format_{};
     bool opened_ = false;
 };
 
