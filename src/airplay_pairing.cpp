@@ -3,10 +3,12 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <string>
 
 #ifdef GWL_AIRPLAY2_HAS_OPENSSL
-#include <openssl/srp.h>
+#include <openssl/bn.h>
 #include <openssl/rand.h>
+#include <openssl/sha.h>
 #endif
 
 namespace gwl::airplay2 {
@@ -21,14 +23,13 @@ bool AirPlayTransientPairing::handle(const std::vector<std::uint8_t>&,
                                      std::vector<std::uint8_t>& response,
                                      std::string& error) {
     response.clear();
-    error = "no portable crypto backend is configured for this target";
+    error = "no portable SHA-512/BN crypto backend is configured for this target";
     return false;
 }
 
 #else
 
 namespace {
-
 struct Tlv { std::uint8_t type; std::vector<std::uint8_t> value; };
 
 std::vector<Tlv> decode_tlv(const std::vector<std::uint8_t>& input) {
@@ -38,7 +39,7 @@ std::vector<Tlv> decode_tlv(const std::vector<std::uint8_t>& input) {
         const auto type = input[p++];
         const auto len = input[p++];
         if (p + len > input.size()) return {};
-        out.push_back({type, std::vector<std::uint8_t>(input.begin() + p, input.begin() + p + len)});
+        out.push_back({type, {input.begin() + p, input.begin() + p + len}});
         p += len;
     }
     return p == input.size() ? out : std::vector<Tlv>{};
@@ -62,13 +63,6 @@ void add_tlv(std::vector<std::uint8_t>& out, std::uint8_t type, const std::vecto
 
 std::vector<std::uint8_t> one_byte(std::uint8_t v) { return {v}; }
 
-class SrpHolder {
-public:
-    SRP* srp = nullptr;
-    ~SrpHolder() { if (srp) SRP_free(srp); }
-    void reset() { if (srp) SRP_free(srp); srp = nullptr; }
-};
-
 const std::array<unsigned char, 384> kN = [] {
     const char* hex =
         "FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E08"
@@ -91,25 +85,57 @@ const std::array<unsigned char, 384> kN = [] {
     return bytes;
 }();
 
+std::vector<std::uint8_t> sha512(const std::vector<std::uint8_t>& data) {
+    std::vector<std::uint8_t> out(SHA512_DIGEST_LENGTH);
+    SHA512(data.data(), data.size(), out.data());
+    return out;
+}
+
+std::vector<std::uint8_t> concat(std::initializer_list<std::vector<std::uint8_t>> parts) {
+    std::vector<std::uint8_t> out;
+    for (const auto& p : parts) out.insert(out.end(), p.begin(), p.end());
+    return out;
+}
+
+std::vector<std::uint8_t> bn_pad(const BIGNUM* bn) {
+    std::vector<std::uint8_t> out(kN.size());
+    BN_bn2binpad(bn, out.data(), static_cast<int>(out.size()));
+    return out;
+}
+
+bool equal_bytes(const std::vector<std::uint8_t>& a, const std::vector<std::uint8_t>& b) {
+    return a.size() == b.size() && CRYPTO_memcmp(a.data(), b.data(), a.size()) == 0;
+}
+
 } // namespace
 
 struct AirPlayTransientPairing::Impl {
-    SrpHolder srp;
+    BIGNUM* N = nullptr;
+    BIGNUM* g = nullptr;
+    BIGNUM* b = nullptr;
+    BIGNUM* v = nullptr;
+    BIGNUM* B = nullptr;
     std::vector<std::uint8_t> salt;
-    std::vector<std::uint8_t> server_key;
-    bool m2_sent = false;
+    std::vector<std::uint8_t> A;
+    std::vector<std::uint8_t> B_bytes;
+
+    ~Impl() {
+        BN_free(N); BN_free(g); BN_clear_free(b); BN_clear_free(v); BN_free(B);
+    }
+    void reset() {
+        BN_free(N); BN_free(g); BN_clear_free(b); BN_clear_free(v); BN_free(B);
+        N = g = b = v = B = nullptr;
+        salt.clear(); A.clear(); B_bytes.clear();
+    }
 };
 
 AirPlayTransientPairing::AirPlayTransientPairing() : impl_(new Impl) {}
 AirPlayTransientPairing::~AirPlayTransientPairing() { delete impl_; }
 
 void AirPlayTransientPairing::reset() {
-    impl_->srp.reset();
-    impl_->salt.clear();
-    impl_->server_key.clear();
+    impl_->reset();
     shared_secret_.clear();
     complete_ = false;
-    impl_->m2_sent = false;
 }
 
 bool AirPlayTransientPairing::handle(const std::vector<std::uint8_t>& request,
@@ -122,6 +148,9 @@ bool AirPlayTransientPairing::handle(const std::vector<std::uint8_t>& request,
     const auto* state = find_tlv(tlvs, 0x06);
     if (!state || state->empty()) { error = "missing pairing state"; return false; }
 
+    BN_CTX* ctx = BN_CTX_new();
+    if (!ctx) { error = "BN context allocation failed"; return false; }
+
     if (state->at(0) == 1) {
         const auto* method = find_tlv(tlvs, 0x00);
         const auto* flags = find_tlv(tlvs, 0x13);
@@ -129,74 +158,118 @@ bool AirPlayTransientPairing::handle(const std::vector<std::uint8_t>& request,
         if (!method || method->empty() || method->at(0) != 0 || !transient) {
             response = {0x06, 0x01, 0x02, 0x07, 0x01, 0x06};
             error = "only transient pair-setup is supported";
+            BN_CTX_free(ctx);
             return true;
         }
 
         reset();
-        impl_->srp.srp = SRP_new(SRP6a_server_method());
-        if (!impl_->srp.srp) { error = "SRP allocation failed"; return false; }
-        SRP_set_username(impl_->srp.srp, "Pair-Setup");
+        impl_->N = BN_bin2bn(kN.data(), static_cast<int>(kN.size()), nullptr);
+        impl_->g = BN_new();
+        impl_->b = BN_new();
+        impl_->v = BN_new();
+        impl_->B = BN_new();
+        if (!impl_->N || !impl_->g || !impl_->b || !impl_->v || !impl_->B) {
+            BN_CTX_free(ctx); error = "SRP allocation failed"; return false;
+        }
+        BN_set_word(impl_->g, 5);
         impl_->salt.resize(16);
         if (RAND_bytes(impl_->salt.data(), static_cast<int>(impl_->salt.size())) != 1) {
-            error = "secure random generation failed"; return false;
+            BN_CTX_free(ctx); error = "secure random generation failed"; return false;
         }
-        const unsigned char g = 5;
-        if (SRP_set_params(impl_->srp.srp, kN.data(), static_cast<int>(kN.size()), &g, 1,
-                           impl_->salt.data(), static_cast<int>(impl_->salt.size())) != SRP_SUCCESS) {
-            error = "SRP parameters rejected"; return false;
+
+        // HAP SRP uses username "Pair-Setup" and the screenless transient code 3939.
+        const auto up = std::vector<std::uint8_t>{'P','a','i','r','-','S','e','t','u','p',':','3','9','3','9'};
+        const auto inner = sha512(up);
+        const auto x_bytes = sha512(concat({impl_->salt, inner}));
+        BIGNUM* x = BN_bin2bn(x_bytes.data(), static_cast<int>(x_bytes.size()), nullptr);
+        BIGNUM* vtmp = BN_new();
+        BIGNUM* gb = BN_new();
+        BIGNUM* kbn = BN_new();
+        if (!x || !vtmp || !gb || !kbn) {
+            BN_free(x); BN_free(vtmp); BN_free(gb); BN_free(kbn); BN_CTX_free(ctx);
+            error = "SRP temporary allocation failed"; return false;
         }
-        if (SRP_set_auth_password(impl_->srp.srp, "3939") != SRP_SUCCESS) {
-            error = "SRP password setup failed"; return false;
+        const auto hn = sha512(std::vector<std::uint8_t>(kN.begin(), kN.end()));
+        const auto hg = sha512(std::vector<std::uint8_t>(kN.size() - 1, 0));
+        // g is padded to the SRP modulus width before hashing.
+        std::vector<std::uint8_t> gpad(kN.size(), 0); gpad.back() = 5;
+        const auto hg2 = sha512(gpad);
+        const auto k_hash = sha512(concat({std::vector<std::uint8_t>(kN.begin(), kN.end()), gpad}));
+        (void)hn; (void)hg; (void)hg2;
+        BN_mod_exp(vtmp, impl_->g, x, impl_->N, ctx);
+        BN_copy(impl_->v, vtmp);
+        BN_free(x);
+        BN_free(vtmp);
+        // k = H(N || PAD(g)), interpreted as an integer.
+        BN_bin2bn(k_hash.data(), static_cast<int>(k_hash.size()), kbn);
+        std::array<unsigned char, 256> braw{};
+        if (RAND_bytes(braw.data(), static_cast<int>(braw.size())) != 1) {
+            BN_free(gb); BN_free(kbn); BN_CTX_free(ctx); error = "secure random generation failed"; return false;
         }
-        cstr* pub = nullptr;
-        if (SRP_gen_pub(impl_->srp.srp, &pub) != SRP_SUCCESS || !pub) {
-            if (pub) cstr_free(pub);
-            error = "SRP public key generation failed"; return false;
-        }
-        impl_->server_key.assign(reinterpret_cast<std::uint8_t*>(pub->data),
-                                 reinterpret_cast<std::uint8_t*>(pub->data) + pub->length);
-        cstr_free(pub);
+        BN_bin2bn(braw.data(), static_cast<int>(braw.size()), impl_->b);
+        BN_mod_exp(gb, impl_->g, impl_->b, impl_->N, ctx);
+        BIGNUM* kv = BN_new();
+        BN_mod_mul(kv, kbn, impl_->v, impl_->N, ctx);
+        BN_mod_add(impl_->B, kv, gb, impl_->N, ctx);
+        BN_free(kv); BN_free(gb); BN_free(kbn);
+        impl_->B_bytes = bn_pad(impl_->B);
+        BN_CTX_free(ctx);
+
         add_tlv(response, 0x06, one_byte(2));
         add_tlv(response, 0x02, impl_->salt);
-        add_tlv(response, 0x03, impl_->server_key);
+        add_tlv(response, 0x03, impl_->B_bytes);
         add_tlv(response, 0x13, one_byte(0x10));
-        impl_->m2_sent = true;
         return true;
     }
 
-    if (state->at(0) == 3 && impl_->m2_sent) {
+    if (state->at(0) == 3 && impl_->B && impl_->v) {
         const auto* pub = find_tlv(tlvs, 0x03);
         const auto* proof = find_tlv(tlvs, 0x04);
-        if (!pub || !proof || pub->empty() || proof->empty()) {
-            error = "missing SRP public key or proof"; return false;
+        if (!pub || !proof || pub->size() != kN.size() || proof->size() != SHA512_DIGEST_LENGTH) {
+            BN_CTX_free(ctx); error = "invalid SRP M3"; return false;
         }
-        cstr* key = nullptr;
-        if (SRP_compute_key(impl_->srp.srp, &key, pub->data(), static_cast<int>(pub->size())) != SRP_SUCCESS || !key) {
-            if (key) cstr_free(key);
-            error = "SRP shared secret calculation failed"; return false;
+        impl_->A = *pub;
+        BIGNUM* A = BN_bin2bn(pub->data(), static_cast<int>(pub->size()), nullptr);
+        BIGNUM* u = BN_new();
+        BIGNUM* vu = BN_new();
+        BIGNUM* base = BN_new();
+        BIGNUM* S = BN_new();
+        if (!A || !u || !vu || !base || !S) {
+            BN_free(A); BN_free(u); BN_free(vu); BN_free(base); BN_free(S); BN_CTX_free(ctx);
+            error = "SRP temporary allocation failed"; return false;
         }
-        shared_secret_.assign(reinterpret_cast<std::uint8_t*>(key->data),
-                              reinterpret_cast<std::uint8_t*>(key->data) + key->length);
-        cstr_free(key);
-        if (SRP_verify(impl_->srp.srp, proof->data(), static_cast<int>(proof->size())) != SRP_SUCCESS) {
-            response = {0x06, 0x01, 0x04, 0x07, 0x01, 0x02};
-            error = "SRP client proof verification failed";
-            return true;
+        if (BN_is_zero(A) || BN_cmp(A, impl_->N) >= 0) {
+            BN_free(A); BN_free(u); BN_free(vu); BN_free(base); BN_free(S); BN_CTX_free(ctx);
+            response = {0x06,0x01,0x04,0x07,0x01,0x02}; error = "invalid SRP public key"; return true;
         }
-        cstr* server_proof = nullptr;
-        if (SRP_respond(impl_->srp.srp, &server_proof) != SRP_SUCCESS || !server_proof) {
-            if (server_proof) cstr_free(server_proof);
-            error = "SRP server proof generation failed"; return false;
+        const auto u_hash = sha512(concat({bn_pad(A), impl_->B_bytes}));
+        BN_bin2bn(u_hash.data(), static_cast<int>(u_hash.size()), u);
+        BN_mod_exp(vu, impl_->v, u, impl_->N, ctx);
+        BN_mod_mul(base, A, vu, impl_->N, ctx);
+        BN_mod_exp(S, base, impl_->b, impl_->N, ctx);
+        const auto K = sha512(bn_pad(S));
+        shared_secret_ = K;
+
+        std::vector<std::uint8_t> xor_ng(64);
+        const auto hn2 = sha512(std::vector<std::uint8_t>(kN.begin(), kN.end()));
+        std::vector<std::uint8_t> gpad(kN.size(), 0); gpad.back() = 5;
+        const auto hg2 = sha512(gpad);
+        for (std::size_t i = 0; i < xor_ng.size(); ++i) xor_ng[i] = hn2[i] ^ hg2[i];
+        const auto hi = sha512(std::vector<std::uint8_t>{'P','a','i','r','-','S','e','t','u','p'});
+        const auto M1 = sha512(concat({xor_ng, hi, impl_->salt, bn_pad(A), impl_->B_bytes, K}));
+        if (!equal_bytes(M1, *proof)) {
+            BN_free(A); BN_free(u); BN_free(vu); BN_free(base); BN_free(S); BN_CTX_free(ctx);
+            response = {0x06,0x01,0x04,0x07,0x01,0x02}; error = "SRP client proof verification failed"; return true;
         }
-        std::vector<std::uint8_t> proof_bytes(reinterpret_cast<std::uint8_t*>(server_proof->data),
-                                               reinterpret_cast<std::uint8_t*>(server_proof->data) + server_proof->length);
-        cstr_free(server_proof);
+        const auto M2 = sha512(concat({bn_pad(A), M1, K}));
         add_tlv(response, 0x06, one_byte(4));
-        add_tlv(response, 0x04, proof_bytes);
+        add_tlv(response, 0x04, M2);
         complete_ = true;
+        BN_free(A); BN_free(u); BN_free(vu); BN_free(base); BN_free(S); BN_CTX_free(ctx);
         return true;
     }
 
+    BN_CTX_free(ctx);
     error = "unexpected pair-setup state";
     return false;
 }
