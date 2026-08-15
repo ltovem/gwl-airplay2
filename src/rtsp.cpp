@@ -49,6 +49,10 @@ std::uint16_t parse_port(const std::string& text, const char* key) {
 RtspSession::RtspSession() = default;
 RtspSession::~RtspSession() = default;
 
+void RtspSession::log(const std::string& message) const {
+    if (log_handler_) log_handler_(message);
+}
+
 void RtspSession::reset() {
     recording_ = false;
     configured_ = false;
@@ -60,6 +64,8 @@ void RtspSession::reset() {
     transport_ = {};
     sdp_ = {};
     crypto_.reset();
+    received_packets_ = 0;
+    received_bytes_ = 0;
     if (alac_audio_pipeline_) alac_audio_pipeline_->reset();
 }
 
@@ -91,6 +97,21 @@ RtspResponse RtspSession::announce(const RtspRequest& request) {
     sdp_ = parsed;
     configured_ = true;
 
+    log("AirPlay ANNOUNCE accepted");
+    for (const auto& media : parsed.media) {
+        std::ostringstream description;
+        description << "SDP media: " << media.type
+                    << " payload=" << media.payload_type
+                    << " codec=" << (media.codec.empty() ? "unknown" : media.codec)
+                    << " clock=" << media.clock_rate;
+        log(description.str());
+    }
+    if (parsed.has_video()) {
+        log("Screen Mirroring: video SDP detected");
+    } else {
+        log("Screen Mirroring: no video SDP in this session");
+    }
+
     // Configure the optional plaintext ALAC path from SDP fmtp. Encrypted
     // session handling remains a separate layer; do not feed ciphertext to
     // the codec backend.
@@ -106,6 +127,7 @@ RtspResponse RtspSession::announce(const RtspRequest& request) {
     CryptoParameters parameters;
     if (extract_crypto_parameters(parsed, parameters)) {
         if (!crypto_.configure(parameters)) return base_response(request, 400, "Bad Request");
+        log("RTSP crypto parameters detected");
     }
 
     auto response = base_response(request, 200, "OK");
@@ -132,6 +154,11 @@ RtspResponse RtspSession::setup(const RtspRequest& request) {
     transport_.server_control_port = 0;
     transport_.server_timing_port = 0;
 
+    std::ostringstream description;
+    description << "RTP SETUP: server_data_port=" << transport_.server_data_port;
+    if (parsed_has_video()) description << " (video session present)";
+    log(description.str());
+
     auto response = base_response(request, 200, "OK");
     response.headers["Session"] = "GWL-AIRPLAY-1";
     response.headers["Transport"] =
@@ -145,6 +172,8 @@ RtspResponse RtspSession::record(const RtspRequest& request) {
         return base_response(request, 455, "Method Not Valid in This State");
     }
     recording_ = true;
+    log("RTSP RECORD: media receiver active");
+    if (sdp_.has_video()) log("Screen Mirroring: waiting for video RTP packets");
     auto response = base_response(request, 200, "OK");
     response.headers["Session"] = "GWL-AIRPLAY-1";
     response.headers["Content-Length"] = "0";
@@ -214,10 +243,29 @@ void RtspSession::handle_media_packet(const RtpPacket& packet) {
     if (!recording_) return;
     if (!jitter_buffer_.push(packet)) return;
 
+    ++received_packets_;
+    received_bytes_ += packet.payload.size();
+
+    // The current RTP receiver is shared by the negotiated media streams.
+    // Log the first packet and periodic counters so screen-mirroring failures
+    // can be distinguished from decoder failures without flooding the UI.
+    if (received_packets_ == 1 || (received_packets_ % 500) == 0) {
+        std::ostringstream message;
+        message << "RTP media: packets=" << received_packets_
+                << " payload_bytes=" << received_bytes_
+                << " payload_type=" << static_cast<int>(packet.payload_type)
+                << " seq=" << packet.sequence_number;
+        log(message.str());
+    }
+
     while (auto ordered = jitter_buffer_.pop()) {
         if (alac_audio_pipeline_) alac_audio_pipeline_->push(*ordered);
         if (media_packet_handler_) media_packet_handler_(*ordered);
     }
+}
+
+bool RtspSession::parsed_has_video() const noexcept {
+    return sdp_.has_video();
 }
 
 } // namespace gwl::airplay2
