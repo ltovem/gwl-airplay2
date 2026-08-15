@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cctype>
 #include <cstring>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <thread>
@@ -61,6 +62,18 @@ std::string header_value(const std::map<std::string, std::string>& headers, cons
         if (equal) return item.second;
     }
     return {};
+}
+
+std::string hex_preview(const std::string& data, std::size_t max_bytes = 128) {
+    std::ostringstream out;
+    out << std::hex << std::setfill('0');
+    const std::size_t n = std::min(data.size(), max_bytes);
+    for (std::size_t i = 0; i < n; ++i) {
+        if (i) out << ' ';
+        out << std::setw(2) << static_cast<unsigned int>(static_cast<unsigned char>(data[i]));
+    }
+    if (data.size() > max_bytes) out << " ...";
+    return out.str();
 }
 
 bool parse_request(std::string& input, HttpRequest& request) {
@@ -132,6 +145,10 @@ public:
                 std::cerr << "[HTTP] request from " << peer << ": "
                           << request.method << " " << request.target << " " << request.protocol
                           << std::endl;
+                if (!request.body.empty()) {
+                    std::cerr << "[HTTP] body length=" << request.body.size()
+                              << " hex=" << hex_preview(request.body) << std::endl;
+                }
                 HttpResponse response = handler ? handler(request) : HttpResponse{};
                 if (response.reason.empty()) response.reason = response.status == 200 ? "OK" : "Error";
                 if (response.protocol.empty()) response.protocol = request.protocol.empty() ? "HTTP/1.1" : request.protocol;
