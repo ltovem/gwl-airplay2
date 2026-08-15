@@ -1,4 +1,5 @@
 #include "airplay2/alac_config.h"
+#include "airplay2/alac_decoder.h"
 #include "airplay2/audio_pipeline.h"
 #include "airplay2/rtp_jitter_buffer.h"
 
@@ -59,17 +60,18 @@ static void test_alac_config_and_fmtp() {
     cookie[1] = 0x00;
     cookie[2] = 0x10;
     cookie[3] = 0x00; // 4096 samples/frame
-    cookie[8] = 2;    // stereo
-    cookie[19] = 0x00;
+    cookie[5] = 16;   // 16-bit samples
+    cookie[9] = 2;    // stereo
     cookie[20] = 0x00;
-    cookie[21] = 0xAC;
-    cookie[22] = 0x44;
-    cookie[23] = 0x00; // 44100 Hz
+    cookie[21] = 0x00;
+    cookie[22] = 0xAC;
+    cookie[23] = 0x44; // 44100 Hz
 
     AlacConfig config;
     assert(parse_alac_config(cookie, config));
     assert(config.frame_length == 4096);
     assert(config.num_channels == 2);
+    assert(config.bit_depth == 16);
     assert(config.sample_rate == 44100);
 
     assert(parse_alac_fmtp("sampleRate=44100;channels=2;bitDepth=16;frameLength=4096", config));
@@ -77,14 +79,26 @@ static void test_alac_config_and_fmtp() {
     assert(config.bit_depth == 16);
 }
 
-class TestDecoder final : public AudioDecoder {
+class TestDecoder final : public AlacDecoder {
 public:
-    bool configure(const std::vector<std::uint8_t>&) override { return true; }
+    bool configure(const AlacConfig& config) override {
+        configured = config.valid();
+        return configured;
+    }
 
-    bool decode(const std::uint8_t*, std::size_t, std::vector<std::int16_t>& pcm) override {
-        pcm = {1, 2, 3, 4}; // two stereo frames
+    bool decode(const std::vector<std::uint8_t>& packet, PcmAudioFrame& pcm) override {
+        if (!configured || packet.empty()) return false;
+        pcm.sample_rate = 44100;
+        pcm.channels = 2;
+        pcm.bits_per_sample = 16;
+        pcm.frames = 2;
+        pcm.samples = {1, 2, 3, 4}; // two stereo frames
         return true;
     }
+
+    void reset() override { configured = false; }
+
+    bool configured = false;
 };
 
 class TestSink final : public AudioSink {
@@ -114,11 +128,14 @@ static void test_audio_pipeline_frame_count() {
     auto* sink_ptr = sink.get();
     AudioPipeline pipeline(std::make_unique<TestDecoder>(), std::move(sink));
 
-    PcmFormat format;
-    format.sample_rate = 44100;
-    format.channels = 2;
-    assert(pipeline.configure(format, {}));
-    assert(pipeline.push(nullptr, 0));
+    AlacConfig config;
+    config.frame_length = 4096;
+    config.bit_depth = 16;
+    config.num_channels = 2;
+    config.sample_rate = 44100;
+    assert(config.valid());
+    assert(pipeline.configure(config));
+    assert(pipeline.push({0x10}));
     assert(sink_ptr->received_frames == 2);
     pipeline.reset();
     assert(!sink_ptr->opened);
