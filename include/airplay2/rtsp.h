@@ -83,6 +83,7 @@ private:
     void log(const std::string& message) const;
 
     bool configured_ = false;
+    bool setup_info_complete_ = false;
     bool recording_ = false;
     RtpTransport transport_{};
     AirPlaySdp sdp_{};
