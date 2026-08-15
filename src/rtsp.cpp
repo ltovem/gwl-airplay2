@@ -61,8 +61,6 @@ std::string info_response_plist() {
 }
 
 std::string setup_event_response_plist(std::uint16_t event_port, std::uint16_t timing_port) {
-    // Binary plist for {eventPort: <port>, timingPort: <port>}.
-    // Each port is encoded as a 16-bit integer (0x11 + two value bytes).
     static const std::array<unsigned char, 77> template_bytes = {
         0x62,0x70,0x6c,0x69,0x73,0x74,0x30,0x30,
         0xd2,0x01,0x02,0x03,0x04,
@@ -182,9 +180,6 @@ RtspResponse RtspSession::setup(const RtspRequest& request) {
         setup_info_complete_ = true;
         configured_ = true;
 
-        // Allocate all three UDP endpoints before replying. Modern AirPlay 2
-        // senders use the ports advertised in this plist to decide whether
-        // the receiver is ready for the subsequent media SETUP/RECORD phase.
         if (!media_receiver_) media_receiver_ = std::make_unique<RtpReceiver>();
         if (!control_receiver_) control_receiver_ = std::make_unique<RtpReceiver>();
         if (!timing_receiver_) timing_receiver_ = std::make_unique<RtpReceiver>();
@@ -306,4 +301,48 @@ RtspResponse RtspSession::teardown(const RtspRequest& request) {
     reset();
     auto response = base_response(request, 200, "OK");
     response.headers["Session"] = "GWL-AIRPLAY-1";
-    response.headers["... (truncated)
+    response.headers["Content-Length"] = "0";
+    return response;
+}
+
+void RtspSession::set_media_packet_handler(MediaPacketHandler handler) {
+    media_packet_handler_ = std::move(handler);
+}
+
+void RtspSession::clear_media_packet_handler() {
+    media_packet_handler_ = {};
+}
+
+void RtspSession::set_alac_audio_pipeline(std::unique_ptr<AlacAudioPipeline> pipeline) {
+    alac_audio_pipeline_ = std::move(pipeline);
+    if (alac_audio_pipeline_ && configured_ && sdp_.has_audio() && !sdp_.fmtp.empty()) {
+        AlacConfig config;
+        if (parse_alac_fmtp(sdp_.fmtp, config) && config.valid()) {
+            alac_audio_pipeline_->configure(config);
+        }
+    }
+}
+
+void RtspSession::handle_media_packet(const RtpPacket& packet) {
+    if (!recording_) return;
+    if (!jitter_buffer_.push(packet)) return;
+
+    ++received_packets_;
+    received_bytes_ += packet.payload.size();
+
+    if (received_packets_ == 1 || (received_packets_ % 500) == 0) {
+        std::ostringstream message;
+        message << "RTP media: packets=" << received_packets_
+                << " payload_bytes=" << received_bytes_
+                << " payload_type=" << static_cast<int>(packet.payload_type)
+                << " seq=" << packet.sequence;
+        log(message.str());
+    }
+
+    while (auto ordered = jitter_buffer_.pop()) {
+        if (alac_audio_pipeline_) alac_audio_pipeline_->push(*ordered);
+        if (media_packet_handler_) media_packet_handler_(*ordered);
+    }
+}
+
+} // namespace gwl::airplay2
