@@ -1,6 +1,5 @@
 #include "airplay2/airplay_receiver.h"
 #include "airplay2/airplay_pairing.h"
-#include "airplay2/airplay_hkp_pairing.h"
 #include "airplay2/apple_audio_sink.h"
 #include "airplay2/http_server.h"
 #include "airplay2/mdns.h"
@@ -70,7 +69,7 @@ std::vector<std::uint8_t> handle_fairplay_setup(const std::vector<std::uint8_t>&
     error = "unsupported FairPlay phase"; return {};
 }
 
-std::string info_binary_plist() {
+std::string initial_volume_binary_plist() {
     static const unsigned char bytes[] = {
         0x62,0x70,0x6c,0x69,0x73,0x74,0x30,0x30,0xd1,0x01,0x02,0x5d,0x69,0x6e,0x69,
         0x74,0x69,0x61,0x6c,0x56,0x6f,0x6c,0x75,0x6d,0x65,0x13,0xff,0xff,0xff,0xff,0xff,
@@ -79,6 +78,17 @@ std::string info_binary_plist() {
         0x00,0x00,0x00,0x22
     };
     return std::string(reinterpret_cast<const char*>(bytes), sizeof(bytes));
+}
+
+std::string device_info_binary_plist(const std::string& device_id) {
+    static const char* hex =
+        "62706c6973743030d70102030405060708090a0b0c0d0e586465766963654944586665617475726573556d6f64656c546e616d655f100f70726f746f636f6c56657273696f6e5d736f7572636556657273696f6e5b737461747573466c6167735f101130303a30303a30303a30303a30303a3030130008030040780a005a4170706c655456332c325f101047574c20416972506c61792044656d6f53312e31563232302e36381004081720292f34465460747d889b9fa60000000000000101000000000000000f000000000000000000000000000000a8";
+    auto bytes = hex_bytes(hex);
+    constexpr std::size_t device_id_offset = 99;
+    if (device_id.size() == 17 && bytes.size() >= device_id_offset + 17) {
+        std::copy(device_id.begin(), device_id.end(), bytes.begin() + device_id_offset);
+    }
+    return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
 }
 }
 
@@ -94,25 +104,19 @@ public:
         log(request.method + " " + request.target);
         if (request.target == "/info" || request.target == "/info/") {
             if (request.method != "GET") return response_for(405, "Method Not Allowed", request);
-            // AirPlay uses two different /info exchanges. The discovery request
-            // carries the txtAirPlay qualifier and expects the receiver's
-            // capabilities. After SETUP, a body-less /info requests a binary
-            // plist (for example initialVolume), not JSON.
             if (request.body.empty()) {
-                const std::string body = info_binary_plist();
+                const std::string body = initial_volume_binary_plist();
                 HttpResponse r; r.status = 200; r.reason = "OK"; r.protocol = request.protocol.empty() ? "RTSP/1.0" : request.protocol;
                 r.headers["Content-Type"] = "application/x-apple-binary-plist";
                 r.headers["Content-Length"] = std::to_string(body.size()); r.body = body;
-                log("GET /info -> 200 (binary plist)");
+                log("GET /info -> 200 (initialVolume binary plist)");
                 return r;
             }
-            std::ostringstream json;
-            json << "{\"name\":\"" << config.device_name << "\",\"model\":\"AppleTV3,2\",\"deviceID\":\"" << config.device_id
-                 << "\",\"protocols\":[\"airplay\"],\"audio\":" << (config.enable_audio ? "true" : "false")
-                 << ",\"video\":" << (config.enable_video ? "true" : "false") << ",\"features\":\"0x5A7FFFF7,0x1E\"}";
-            const std::string body = json.str();
-            log("GET /info -> 200");
-            HttpResponse r; r.status = 200; r.reason = "OK"; r.protocol = request.protocol.empty() ? "RTSP/1.0" : request.protocol; r.content_type = "application/json"; r.headers["Content-Type"] = "application/json"; r.headers["Content-Length"] = std::to_string(body.size()); r.body = body; return r;
+            const std::string body = device_info_binary_plist(config.device_id);
+            log("GET /info -> 200 (device info binary plist)");
+            HttpResponse r; r.status = 200; r.reason = "OK"; r.protocol = request.protocol.empty() ? "RTSP/1.0" : request.protocol;
+            r.headers["Content-Type"] = "application/x-apple-binary-plist";
+            r.headers["Content-Length"] = std::to_string(body.size()); r.body = body; return r;
         }
         if (request.target == "/pair-setup") {
             if (request.method != "POST") return response_for(405, "Method Not Allowed", request);
