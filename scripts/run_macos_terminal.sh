@@ -8,12 +8,14 @@ JOBS="$(sysctl -n hw.ncpu 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null |
 cd "${ROOT_DIR}"
 
 echo "==> Pull latest source"
-git pull --ff-only
+# Rebase local commits instead of requiring a fast-forward. This keeps a
+# developer's clean local work while allowing the one-command runner to follow
+# the remote main branch after parallel upstream commits.
+git pull --rebase --autostash
 
 echo "==> Sync git submodules"
 git submodule sync --recursive
 git submodule update --init --recursive
-
 echo "==> Configure"
 CMAKE_EXTRA=()
 if command -v brew >/dev/null 2>&1; then
@@ -34,7 +36,6 @@ cmake -S . -B "${BUILD_DIR}" -DCMAKE_BUILD_TYPE=Debug -DGWL_AIRPLAY2_BUILD_DEMO=
 
 echo "==> Build"
 cmake --build "${BUILD_DIR}" --config Debug -j"${JOBS}"
-
 echo ""
 echo "============================================================"
 echo " GWL AirPlay 2 - macOS terminal receiver"
