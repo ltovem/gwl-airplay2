@@ -83,13 +83,24 @@ std::string initial_volume_binary_plist() {
 }
 
 std::string device_info_binary_plist(const std::string& device_id) {
+    // Valid binary plist generated from the AirPlay /info schema. The old
+    // hand-written plist advertised an unrelated feature integer, which made
+    // recent Apple senders drop the connection immediately after /info.
     static const char* hex =
-        "62706c6973743030d70102030405060708090a0b0c0d0e586465766963654944586665617475726573556d6f64656c546e616d655f100f70726f746f636f6c56657273696f6e5d736f7572636556657273696f6e5b737461747573466c6167735f101130303a30303a30303a30303a30303a3030130008030040780a005a4170706c655456332c325f101047574c20416972506c61792044656d6f53312e31563232302e36381004081720292f34465460747d889b9fa60000000000000101000000000000000f000000000000000000000000000000a8";
+        "62706c6973743030dc0102030405060708090a0b0c0d0e0f0f10111213141516175864657669636549445866656174757265735f10116b656570416c6976654c6f77506f7765725f10186b656570416c69766553656e6453746174734173426f64795c6d616e756661637475726572556d6f64656c546e616d655270695f100f70726f746f636f6c56657273696f6e5d736f7572636556657273696f6e5b737461747573466c6167735276765f101130303a30303a30303a30303a30303a3030130000001e5a7ffff7095347574c5a4170706c655456332c325f101047574c20416972506c61792044656d6f5f102430303030303030302d303030302d343030302d383030302d30303030303030303030303053312e31563232302e36381044100200080021002a003300470062006f0075007a007d008f009d00a900ac00c000c900ca00ce00d900ec01130117011e01200000000000000201000000000000001800000000000000000000000000000122";
     auto bytes = hex_bytes(hex);
-    constexpr std::size_t device_id_offset = 99;
-    if (device_id.size() == 17 && bytes.size() >= device_id_offset + 17) {
-        std::copy(device_id.begin(), device_id.end(), bytes.begin() + device_id_offset);
-    }
+    const std::string device_placeholder = "00:00:00:00:00:00";
+    const std::string pi_placeholder = "00000000-0000-4000-8000-000000000000";
+    const std::string pi = make_pi(device_id);
+    auto replace = [&bytes](const std::string& from, const std::string& to) {
+        if (from.size() != to.size()) return false;
+        const auto it = std::search(bytes.begin(), bytes.end(), from.begin(), from.end());
+        if (it == bytes.end()) return false;
+        std::copy(to.begin(), to.end(), it);
+        return true;
+    };
+    replace(device_placeholder, device_id);
+    replace(pi_placeholder, pi);
     return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
 }
 }
@@ -115,7 +126,7 @@ public:
                 return r;
             }
             const std::string body = device_info_binary_plist(config.device_id);
-            log("GET /info -> 200 (device info binary plist)");
+            log("GET /info -> 200 (device info binary plist, " + std::to_string(body.size()) + " bytes)");
             HttpResponse r; r.status = 200; r.reason = "OK"; r.protocol = request.protocol.empty() ? "RTSP/1.0" : request.protocol;
             r.headers["Content-Type"] = "application/x-apple-binary-plist";
             r.headers["Content-Length"] = std::to_string(body.size()); r.body = body; return r;
