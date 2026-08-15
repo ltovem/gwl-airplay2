@@ -21,9 +21,7 @@ int main() {
     config.enable_audio = true;
     config.enable_video = false;
     config.audio_sink_factory = [] {
-        auto sink = std::make_unique<gwl::airplay2::AppleAudioSink>();
-        if (!sink->open(44100, 2, 16)) return std::unique_ptr<gwl::airplay2::AudioSink>{};
-        return std::unique_ptr<gwl::airplay2::AudioSink>(std::move(sink));
+        return std::make_unique<gwl::airplay2::AppleAudioSink>();
     };
 
     gwl::airplay2::AirPlayReceiver receiver;
