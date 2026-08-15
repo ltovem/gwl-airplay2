@@ -68,6 +68,9 @@ endif()
 
 if(GWL_AIRPLAY2_BUILD_TESTS)
     enable_testing()
+    add_executable(gwl-airplay2-tests tests/core_tests.cpp)
+    target_link_libraries(gwl-airplay2-tests PRIVATE gwl-airplay2)
+    add_test(NAME gwl-airplay2-core COMMAND gwl-airplay2-tests)
 endif()
 
 # Installation is useful for desktop packages and for consumers that build
