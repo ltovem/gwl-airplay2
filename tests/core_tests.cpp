@@ -1,3 +1,4 @@
+#include "airplay2/alac_audio_pipeline.h"
 #include "airplay2/alac_config.h"
 #include "airplay2/alac_decoder.h"
 #include "airplay2/audio_pipeline.h"
@@ -123,22 +124,38 @@ public:
     std::size_t received_frames = 0;
 };
 
-static void test_audio_pipeline_frame_count() {
-    auto sink = std::make_unique<TestSink>();
-    auto* sink_ptr = sink.get();
-    AudioPipeline pipeline(std::make_unique<TestDecoder>(), std::move(sink));
-
+static AlacConfig test_config() {
     AlacConfig config;
     config.frame_length = 4096;
     config.bit_depth = 16;
     config.num_channels = 2;
     config.sample_rate = 44100;
-    assert(config.valid());
-    assert(pipeline.configure(config));
+    return config;
+}
+
+static void test_audio_pipeline_frame_count() {
+    auto sink = std::make_unique<TestSink>();
+    auto* sink_ptr = sink.get();
+    AudioPipeline pipeline(std::make_unique<TestDecoder>(), std::move(sink));
+
+    assert(pipeline.configure(test_config()));
     assert(pipeline.push({0x10}));
     assert(sink_ptr->received_frames == 2);
     pipeline.reset();
     assert(!sink_ptr->opened);
+}
+
+static void test_alac_rtp_pipeline() {
+    auto sink = std::make_unique<TestSink>();
+    auto* sink_ptr = sink.get();
+    AlacAudioPipeline pipeline(std::make_unique<TestDecoder>(), std::move(sink));
+
+    assert(pipeline.configure(test_config()));
+    assert(pipeline.push(packet(1)));
+    assert(pipeline.configured());
+    assert(sink_ptr->received_frames == 2);
+    pipeline.reset();
+    assert(!pipeline.configured());
 }
 
 int main() {
@@ -147,5 +164,6 @@ int main() {
     test_jitter_duplicates();
     test_alac_config_and_fmtp();
     test_audio_pipeline_frame_count();
+    test_alac_rtp_pipeline();
     return 0;
 }
