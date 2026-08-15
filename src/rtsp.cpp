@@ -153,6 +153,7 @@ RtspResponse RtspSession::record(const RtspRequest& request) {
 
 RtspResponse RtspSession::pause(const RtspRequest& request) {
     recording_ = false;
+    if (alac_audio_pipeline_) alac_audio_pipeline_->reset();
     auto response = base_response(request, 200, "OK");
     response.headers["Session"] = "GWL-AIRPLAY-1";
     response.headers["Content-Length"] = "0";
@@ -160,6 +161,7 @@ RtspResponse RtspSession::pause(const RtspRequest& request) {
 }
 
 RtspResponse RtspSession::flush(const RtspRequest& request) {
+    jitter_buffer_.reset();
     auto response = base_response(request, 200, "OK");
     response.headers["Session"] = "GWL-AIRPLAY-1";
     response.headers["Content-Length"] = "0";
@@ -207,7 +209,9 @@ void RtspSession::set_alac_audio_pipeline(std::unique_ptr<AlacAudioPipeline> pip
 }
 
 void RtspSession::handle_media_packet(const RtpPacket& packet) {
-    if (!recording_ && !configured_) return;
+    // SETUP may start the receiver before RECORD; never deliver media until
+    // the sender has explicitly entered the recording state.
+    if (!recording_) return;
     if (!jitter_buffer_.push(packet)) return;
 
     while (auto ordered = jitter_buffer_.pop()) {
