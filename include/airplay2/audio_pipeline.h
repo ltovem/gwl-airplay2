@@ -5,7 +5,7 @@
 #include <memory>
 #include <vector>
 
-#include "airplay2/media_frame.h"
+#include "airplay2/alac_decoder.h"
 
 namespace gwl::airplay2 {
 
@@ -26,29 +26,27 @@ public:
     virtual bool write(const std::int16_t* samples, std::size_t frames) = 0;
 };
 
-class AudioDecoder {
-public:
-    virtual ~AudioDecoder() = default;
-    virtual bool configure(const std::vector<std::uint8_t>& codec_data) = 0;
-    virtual bool decode(const std::uint8_t* data, std::size_t size,
-                        std::vector<std::int16_t>& pcm) = 0;
-};
-
+// Bridges the RTP/codec layer to a platform AudioSink. The decoder is the
+// same portable AlacDecoder implementation on every platform; only the sink
+// is platform-specific.
 class AudioPipeline {
 public:
-    AudioPipeline(std::unique_ptr<AudioDecoder> decoder,
+    AudioPipeline(std::unique_ptr<AlacDecoder> decoder,
                   std::unique_ptr<AudioSink> sink);
     ~AudioPipeline();
 
     AudioPipeline(const AudioPipeline&) = delete;
     AudioPipeline& operator=(const AudioPipeline&) = delete;
 
-    bool configure(const PcmFormat& format, const std::vector<std::uint8_t>& codec_data);
-    bool push(const std::uint8_t* data, std::size_t size);
+    bool configure(const AlacConfig& config);
+    bool push(const std::vector<std::uint8_t>& packet);
     void reset();
 
+    bool opened() const noexcept { return opened_; }
+    const PcmFormat& format() const noexcept { return format_; }
+
 private:
-    std::unique_ptr<AudioDecoder> decoder_;
+    std::unique_ptr<AlacDecoder> decoder_;
     std::unique_ptr<AudioSink> sink_;
     PcmFormat format_{};
     bool opened_ = false;
