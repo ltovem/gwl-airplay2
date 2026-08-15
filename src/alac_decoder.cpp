@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <new>
 
 #include "ALACBitUtilities.h"
 #include "ALACDecoder.h"
@@ -66,13 +67,12 @@ bool SoftwareAlacDecoder::configure(const AlacConfig& config) {
 bool SoftwareAlacDecoder::decode(const std::vector<std::uint8_t>& packet, PcmAudioFrame& output) {
     output = {};
     if (!impl_ || !impl_->configured || packet.empty()) return false;
+    if (packet.size() > std::numeric_limits<std::uint32_t>::max()) return false;
 
-    if (impl_->config.frame_length > std::numeric_limits<std::uint32_t>::max() /
-                                      impl_->config.num_channels / sizeof(std::int16_t)) {
-        return false;
-    }
     const std::size_t capacity = static_cast<std::size_t>(impl_->config.frame_length) *
                                  impl_->config.num_channels;
+    if (capacity > std::numeric_limits<std::size_t>::max() / sizeof(std::int16_t)) return false;
+
     std::vector<std::int16_t> samples(capacity);
     BitBuffer bits{};
     BitBufferInit(&bits, const_cast<std::uint8_t*>(packet.data()), static_cast<std::uint32_t>(packet.size()));
@@ -96,12 +96,11 @@ bool SoftwareAlacDecoder::decode(const std::vector<std::uint8_t>& packet, PcmAud
 }
 
 void SoftwareAlacDecoder::reset() {
-    if (impl_) {
-        impl_->config = {};
-        impl_->configured = false;
-        impl_->decoder.~ALACDecoder();
-        new (&impl_->decoder) ALACDecoder();
-    }
+    if (!impl_) return;
+    impl_->config = {};
+    impl_->configured = false;
+    impl_->decoder.~ALACDecoder();
+    new (&impl_->decoder) ALACDecoder();
 }
 
 std::unique_ptr<AlacDecoder> create_software_alac_decoder() {
