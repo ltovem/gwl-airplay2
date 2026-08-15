@@ -2,7 +2,6 @@
 
 #include <array>
 #include <atomic>
-#include <chrono>
 #include <mutex>
 #include <thread>
 
@@ -29,33 +28,29 @@ public:
     PacketHandler handler;
     std::atomic<bool> worker_running{false};
     std::thread worker;
-};
 
-namespace {
+    void stop_worker() {
+        worker_running.store(false, std::memory_order_release);
+        if (worker.joinable()) worker.join();
+    }
 
-void stop_worker(RtpReceiver::Impl& impl) {
-    impl.worker_running.store(false, std::memory_order_release);
-    if (impl.worker.joinable()) impl.worker.join();
-}
+    void start_worker(RtpReceiver* receiver) {
+        if (worker_running.exchange(true, std::memory_order_acq_rel)) return;
+        worker = std::thread([this, receiver] {
+            while (worker_running.load(std::memory_order_acquire)) {
+                RtpPacket packet;
+                if (!receiver->receive(packet, 100)) continue;
 
-void start_worker(RtpReceiver::Impl& impl, RtpReceiver* receiver) {
-    if (impl.worker_running.exchange(true, std::memory_order_acq_rel)) return;
-    impl.worker = std::thread([&impl, receiver] {
-        while (impl.worker_running.load(std::memory_order_acquire)) {
-            RtpPacket packet;
-            if (!receiver->receive(packet, 100)) continue;
-
-            PacketHandler callback;
-            {
-                std::lock_guard<std::mutex> lock(impl.handler_mutex);
-                callback = impl.handler;
+                PacketHandler callback;
+                {
+                    std::lock_guard<std::mutex> lock(handler_mutex);
+                    callback = handler;
+                }
+                if (callback) callback(packet);
             }
-            if (callback) callback(packet);
-        }
-    });
-}
-
-} // namespace
+        });
+    }
+};
 
 RtpReceiver::RtpReceiver() : impl_(std::make_unique<Impl>()) {}
 
@@ -96,16 +91,18 @@ bool RtpReceiver::bind(std::uint16_t requested_port) {
         impl_->port = ntohs(actual.sin_port);
     }
 
+    bool has_handler = false;
     {
         std::lock_guard<std::mutex> lock(impl_->handler_mutex);
-        if (impl_->handler) start_worker(*impl_, this);
+        has_handler = static_cast<bool>(impl_->handler);
     }
+    if (has_handler) impl_->start_worker(this);
     return true;
 }
 
 void RtpReceiver::close() {
     if (!impl_) return;
-    stop_worker(*impl_);
+    impl_->stop_worker();
     if (impl_->fd < 0) return;
 #if defined(_WIN32)
     closesocket(impl_->fd);
@@ -126,11 +123,11 @@ void RtpReceiver::set_packet_handler(PacketHandler handler) {
         std::lock_guard<std::mutex> lock(impl_->handler_mutex);
         impl_->handler = std::move(handler);
     }
-    if (running()) start_worker(*impl_, this);
+    if (running()) impl_->start_worker(this);
 }
 
 void RtpReceiver::clear_packet_handler() {
-    stop_worker(*impl_);
+    impl_->stop_worker();
     std::lock_guard<std::mutex> lock(impl_->handler_mutex);
     impl_->handler = {};
 }
